@@ -1,0 +1,6 @@
+streamlit
+gspread
+google-auth
+qrcode[pil]
+cryptography
+extra-streamlit-components
