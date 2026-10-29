@@ -47,6 +47,13 @@ Tại thư mục chứa dự án, chạy lệnh:
 streamlit run app.py
 
 ```
+hoặc
+
+```bash
+python -m streamlit run app.py
+
+```
+
 
 Terminal sẽ hiển thị 2 đường link. Hãy sử dụng **Network URL** (ví dụ: `http://192.168.1.15:8501`) để có thể truy cập từ các thiết bị khác trong mạng.
 
