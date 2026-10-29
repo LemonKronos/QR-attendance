@@ -1,4 +1,4 @@
-credentials.json
+# credentials.json
 secret.key
 __pycache__/
 *.pyc

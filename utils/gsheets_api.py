@@ -11,8 +11,8 @@ def get_client():
     creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPE)
     return gspread.authorize(creds), "OK"
 
-# IMPORTANT: Điền URL Google Sheet của giảng viên vào đây
-SHEET_URL = "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID_HERE/edit"
+# URL Google Sheet để chạy thử
+SHEET_URL = "https://docs.google.com/spreadsheets/d/11or8N-px_ac1bggLJlCaRMllQch3MCcXMF_DDZfhr3c/edit?usp=sharing"
 
 def mark_attendance(class_name, student_id, student_name, is_flagged=False):
     client, msg = get_client()
