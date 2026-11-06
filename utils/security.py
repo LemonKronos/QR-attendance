@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import qrcode
+import streamlit as st
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SECRET_KEY_PATH = PROJECT_ROOT / "secret.key"
@@ -22,9 +23,38 @@ SIGNATURE_BYTE_LENGTH = 16
 
 DEFAULT_TEACHER_PASSWORD = "admin123"
 TEACHER_PASSWORD_ENVIRONMENT_VARIABLE = "TEACHER_PASSWORD"
+APP_SECRET_KEY_ENVIRONMENT_VARIABLE = "APP_SECRET_KEY"
+
+
+def _get_configured_secret(name: str) -> str:
+    """Read a top-level Streamlit secret, falling back safely when not configured."""
+    environment_value = os.environ.get(name, "").strip()
+    if environment_value:
+        return environment_value
+    try:
+        return str(st.secrets.get(name, "")).strip()
+    except Exception:
+        # Streamlit raises when no secrets.toml exists in local development.
+        return ""
 
 
 def _load_or_create_secret_key() -> bytes:
+    configured_key = _get_configured_secret(APP_SECRET_KEY_ENVIRONMENT_VARIABLE)
+    if configured_key:
+        # Require exactly 32 random bytes represented as 64 hexadecimal chars.
+        if len(configured_key) != 64:
+            raise RuntimeError(
+                "APP_SECRET_KEY must be exactly 64 hexadecimal characters. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+        try:
+            return bytes.fromhex(configured_key)
+        except ValueError as error:
+            raise RuntimeError("APP_SECRET_KEY must contain only hexadecimal characters.") from error
+
+    # Local-development fallback. On Community Cloud, configure APP_SECRET_KEY
+    # in App settings -> Secrets; the writable container filesystem is not the
+    # source of truth for a signing key that must survive app restarts.
     if not SECRET_KEY_PATH.exists():
         try:
             with open(SECRET_KEY_PATH, "xb") as secret_key_file:
@@ -154,7 +184,8 @@ def make_qr_image(url: str):
 # ---------------------------------------------------------------------------
 
 def _get_expected_teacher_password() -> str:
-    return os.environ.get(TEACHER_PASSWORD_ENVIRONMENT_VARIABLE, DEFAULT_TEACHER_PASSWORD)
+    configured_password = _get_configured_secret(TEACHER_PASSWORD_ENVIRONMENT_VARIABLE)
+    return configured_password or DEFAULT_TEACHER_PASSWORD
 
 
 def is_using_default_teacher_password() -> bool:

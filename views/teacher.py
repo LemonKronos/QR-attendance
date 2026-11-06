@@ -2,6 +2,7 @@ import html
 import io
 import logging
 import math
+import os
 import socket
 import time
 
@@ -94,6 +95,17 @@ def get_local_ip_address() -> str:
 
 
 def get_default_base_url() -> str:
+    """Use the deployed public URL when configured; otherwise use the local LAN IP."""
+    configured_url = os.environ.get("PUBLIC_BASE_URL", "").strip()
+    if not configured_url:
+        try:
+            configured_url = str(st.secrets.get("PUBLIC_BASE_URL", "")).strip()
+        except Exception:
+            configured_url = ""
+
+    if configured_url:
+        return configured_url.rstrip("/")
+
     server_port = st.get_option("server.port")
     return f"http://{get_local_ip_address()}:{server_port}"
 
@@ -477,8 +489,9 @@ else:
 
     if security.is_using_default_teacher_password():
         show_notice(
-            "Đang dùng mật khẩu mặc định. Hãy đặt biến môi trường "
-            f"{security.TEACHER_PASSWORD_ENVIRONMENT_VARIABLE} để đổi mật khẩu."
+            "Đang dùng mật khẩu mặc định. Hãy đặt "
+            f"{security.TEACHER_PASSWORD_ENVIRONMENT_VARIABLE} trong Streamlit Secrets "
+            "(hoặc biến môi trường khi chạy local) để đổi mật khẩu."
         )
 
     escaped_sheet_url = html.escape(gsheets_api.SHEET_URL, quote=True)
@@ -507,8 +520,9 @@ else:
             placeholder=get_default_base_url()
         )
         st.caption(
-            "Chỉ điền khi địa chỉ mặc định bị sai, hoặc khi dùng ngrok/cloudflared. "
-            "Ví dụ: https://ten-cua-ban.trycloudflare.com"
+            "Để deploy cloud, đặt PUBLIC_BASE_URL trong Streamlit Secrets thành URL "
+            "https://...streamlit.app. Ô này chỉ dùng để ghi đè tạm thời; để trống "
+            "sẽ tự dùng PUBLIC_BASE_URL (hoặc IP LAN khi chạy local)."
         )
 
     qr_error_message = ""

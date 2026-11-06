@@ -1,4 +1,17 @@
-# credentials.json
-secret.key
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+.venv/
+venv/
+
+# Local secrets and credentials (NEVER commit these)
+credentials.json
+secret.key
+.env
+.env.*
+.streamlit/secrets.toml
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

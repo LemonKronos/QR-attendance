@@ -3,11 +3,13 @@ import difflib
 import logging
 import threading
 import time
+import os
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
 import gspread
+import streamlit as st
 from google.oauth2.service_account import Credentials
 
 logger = logging.getLogger(__name__)
@@ -20,7 +22,21 @@ SCOPES = [
 ]
 
 # URL Google Sheet để chạy thử
-SHEET_URL = "https://docs.google.com/spreadsheets/d/11or8N-px_ac1bggLJlCaRMllQch3MCcXMF_DDZfhr3c/edit?usp=sharing"
+DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/11or8N-px_ac1bggLJlCaRMllQch3MCcXMF_DDZfhr3c/edit?usp=sharing"
+
+
+def _get_setting(name: str, default: str = "") -> str:
+    """Read an environment variable or top-level Streamlit secret."""
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    try:
+        return str(st.secrets.get(name, default)).strip()
+    except Exception:
+        return default
+
+
+SHEET_URL = _get_setting("SHEET_URL", DEFAULT_SHEET_URL)
 
 # Column A holds the student ID and column B the student name.
 # Every attendance date gets its own column after those two.
@@ -104,10 +120,35 @@ def _call_with_retry(operation, max_attempts: int = MAX_RETRY_ATTEMPTS):
 def _get_spreadsheet():
     global _cached_spreadsheet
     if _cached_spreadsheet is None:
-        if not CREDENTIALS_PATH.exists():
-            raise UserFacingError("Thiếu file credentials.json. Vui lòng xem README.md")
         logger.info("Loading Google service-account credentials")
-        credentials = Credentials.from_service_account_file(str(CREDENTIALS_PATH), scopes=SCOPES)
+        service_account_info = None
+        try:
+            configured_account = st.secrets.get("gcp_service_account")
+            if configured_account:
+                service_account_info = dict(configured_account)
+        except Exception:
+            # No local secrets.toml: continue to the credentials.json fallback.
+            pass
+
+        if service_account_info:
+            private_key = service_account_info.get("private_key", "")
+            if isinstance(private_key, str):
+                # Accommodate either TOML-decoded newlines or escaped JSON newlines.
+                service_account_info["private_key"] = private_key.replace("\\n", "\n")
+            credentials = Credentials.from_service_account_info(
+                service_account_info,
+                scopes=SCOPES,
+            )
+        elif CREDENTIALS_PATH.exists():
+            credentials = Credentials.from_service_account_file(
+                str(CREDENTIALS_PATH),
+                scopes=SCOPES,
+            )
+        else:
+            raise UserFacingError(
+                "Thiếu Google credentials. Hãy cấu hình [gcp_service_account] "
+                "trong Streamlit Secrets hoặc đặt credentials.json ở thư mục gốc."
+            )
         client = gspread.authorize(credentials)
         # gspread defaults to no request timeout. Without this, a stalled
         # Google API connection can leave the teacher page loading forever.
