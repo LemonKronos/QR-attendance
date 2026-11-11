@@ -10,8 +10,10 @@ ignored, and the same student checking in twice from their own phone is fine.
 """
 
 import hashlib
+from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from utils import clock
 
@@ -66,30 +68,36 @@ def build_cookie_value(previous_cookie_value: str, today_date_code: str, student
     return COOKIE_SEPARATOR.join([today_date_code] + recorded_student_ids)
 
 
-def load_browser_cookies() -> dict:
-    """Read the browser's cookies from inside the browser.
+_COMPONENT_DIRECTORY = Path(__file__).resolve().parent.parent / "components" / "device_cookie"
+_device_cookie_component = components.declare_component(
+    "device_cookie", path=str(_COMPONENT_DIRECTORY)
+)
+
+
+def load_browser_cookie(cookie_name: str):
+    """Read this device's cookie from inside the browser.
+
+    Returns (is_loaded, cookie_value).
 
     st.context.cookies only sees cookies sent when the page's websocket opens,
-    and on Streamlit Community Cloud it often misses cookies that were set by
-    JavaScript (it works on a local run, which is why the flag worked locally
-    but not online). Reading document.cookie in the browser avoids that.
+    and on Streamlit Community Cloud it often misses cookies set by JavaScript
+    (it works on a local run, which is why the flag worked locally but not
+    online). Reading document.cookie in the browser avoids that.
 
-    Call this while the page is being drawn (not inside a button handler). The
-    first run returns an empty dict; the browser answers a moment later and
-    Streamlit re-runs the script automatically with the real cookies.
+    Call this ONCE per run, at the same place on the page, as soon as the
+    class is known (before the student types anything). The first run returns
+    is_loaded=False; the browser answers a moment later, Streamlit re-runs the
+    script once, and from then on the value is available. Because the student
+    spends many seconds typing, it is always loaded by the time they press send.
     """
-    try:
-        import extra_streamlit_components as stx
+    result = _device_cookie_component(
+        cookie_name=cookie_name, key="device_cookie_reader", default=None
+    )
+    if isinstance(result, dict) and result.get("loaded"):
+        return True, str(result.get("value", ""))
+    return False, ""
 
-        cookies = stx.CookieManager(key="device_cookie_reader").get_all(key="device_cookie_reader_all")
-        return dict(cookies) if cookies else {}
-    except Exception:
-        return {}
 
-
-def read_device_cookie(cookie_name: str, browser_cookies: dict) -> str:
-    """Browser value first; the old server-side header is only a fallback."""
-    browser_value = browser_cookies.get(cookie_name)
-    if browser_value:
-        return str(browser_value)
+def read_header_cookie(cookie_name: str) -> str:
+    """Old server-side way. Only a fallback: unreliable on Streamlit Cloud."""
     return st.context.cookies.get(cookie_name, "")

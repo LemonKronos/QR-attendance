@@ -24,6 +24,9 @@ SESSION_DEFAULTS = {
     "draft_student_name": "",
     "verified_class_name": "",
     "submit_deadline": 0.0,
+    "device_wait_warned": False,
+    "done_student_name": "",
+    "done_cookie_value": "",
 }
 for session_key, default_value in SESSION_DEFAULTS.items():
     if session_key not in st.session_state:
@@ -35,6 +38,89 @@ def show_message(text: str):
         f'<div class="outlined-message">{html.escape(text)}</div>',
         unsafe_allow_html=True
     )
+
+
+def render_success_card(student_id: str, student_name: str, cookie_name: str, cookie_value: str):
+    """Success card + cookie write + auto-close timer.
+
+    Used right after sending AND on any later rerun (checkin_step == "done"),
+    so a rerun can never bring the entry form back or allow a second send.
+    """
+    st.markdown(f"""
+    <div class="confirm-card">
+        <div class="confirm-card-title" style="font-size: 1.3rem;">
+            ĐIỂM DANH THÀNH CÔNG
+        </div>
+        <div class="confirm-card-subtitle">
+            Đã ghi nhận vào hệ thống
+        </div>
+        <div class="info-field-box" style="text-align: center;">
+            <div class="info-field-value">
+                {html.escape(student_id)} — {html.escape(student_name)}
+            </div>
+        </div>
+        <div id="auto-exit-status" style="color: #1488DB; font-weight: 600; font-size: 0.95rem; margin-top: 12px;">
+            Tự động đóng trang sau 2 giây...
+        </div>
+        <div class="countdown-track">
+            <div class="countdown-bar"></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Ghi nhớ thiết bị đã dùng cho mã sinh viên này hôm nay, rồi hẹn giờ đóng trang
+    st.html(f"""
+    <script>
+        (function() {{
+            const parentWindow = window;
+            const parentDocument = parentWindow.document;
+
+            parentDocument.cookie = "{cookie_name}={cookie_value}; max-age={device_check.COOKIE_LIFETIME_SECONDS}; path=/; SameSite=Lax";
+
+            // Only ever arm ONE exit timer, even if this script runs again.
+            if (parentWindow._studentExitTimer) {{
+                return;
+            }}
+
+            function triggerExit() {{
+                const statusElement = parentDocument.getElementById('auto-exit-status');
+                if (statusElement) {{
+                    statusElement.innerText = "Đã hoàn tất điểm danh.";
+                }}
+
+                const userAgent = navigator.userAgent || "";
+                const isAndroid = /Android/i.test(userAgent);
+
+                // 1. Thử đóng cửa sổ/tab hiện tại
+                try {{
+                    parentWindow.open('', '_self', '');
+                    parentWindow.close();
+                }} catch (error) {{}}
+                try {{
+                    window.top.close();
+                }} catch (error) {{}}
+
+                // 2. Trên Android: thoát thẳng ra Màn hình chính
+                if (isAndroid) {{
+                    try {{
+                        window.top.location.href = "intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.HOME;end";
+                    }} catch (error) {{}}
+                }}
+
+                // 3. Lùi về tác vụ trước nếu có trong lịch sử trình duyệt
+                setTimeout(function() {{
+                    try {{
+                        if (window.top.history.length > 1) {{
+                            window.top.history.back();
+                        }}
+                    }} catch (error) {{}}
+                }}, 250);
+            }}
+
+            parentWindow._studentExitTimer = parentWindow.setTimeout(triggerExit, 2000);
+        }})();
+    </script>
+    """, unsafe_allow_javascript=True)
 
 
 # After a failed send, put the "Gửi" button back to normal so the student can retry.
@@ -375,6 +461,12 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+# Read this device's cookie from the browser as soon as the class is known.
+# It stays at this fixed place on every run, so it is never re-created
+# (re-creating it later is what made the page re-run after a successful send).
+device_cookie_name = device_check.get_cookie_name(class_name)
+device_cookie_loaded, device_cookie_value = device_check.load_browser_cookie(device_cookie_name)
+
 step_placeholder = st.empty()
 
 # ====================================================
@@ -449,10 +541,6 @@ elif st.session_state.checkin_step == "confirm":
     draft_student_name = st.session_state.draft_student_name
 
     with step_placeholder.container():
-        # Read this device's cookies from the browser while the page is shown,
-        # so they are already loaded by the time the student presses "Gửi".
-        browser_cookies = device_check.load_browser_cookies()
-
         st.markdown(f"""
         <div class="confirm-card">
             <div class="confirm-card-title">XÁC NHẬN THÔNG TIN</div>
@@ -511,18 +599,30 @@ elif st.session_state.checkin_step == "confirm":
         st.rerun()
 
     if send_clicked:
-        # Kiểm tra thiết bị (âm thầm): chỉ đánh dấu khi CHÍNH THIẾT BỊ NÀY đã điểm danh
+        if not device_cookie_loaded and not st.session_state.device_wait_warned:
+            # The browser has not reported this device's cookie yet (very rare:
+            # the student would have to be faster than the page load). Ask for
+            # ONE retry instead of silently skipping the duplicate check.
+            st.session_state.device_wait_warned = True
+            show_message("Đang kiểm tra thiết bị. Vui lòng bấm Gửi lại.")
+            st.html(RESTORE_SEND_BUTTON_SCRIPT, unsafe_allow_javascript=True)
+            st.stop()
+
+        # Kiểm tra thiết bị (âm thầm): đánh dấu khi CHÍNH THIẾT BỊ NÀY đã điểm danh
         # cho một mã sinh viên KHÁC trong CÙNG NGÀY. Sang ngày khác thì không đánh dấu.
-        cookie_name = device_check.get_cookie_name(class_name)
-        previous_cookie_value = device_check.read_device_cookie(cookie_name, browser_cookies)
-        logger.info(
-            "Duplicate check: cookie_received=%s, cookie_length=%d",
-            bool(previous_cookie_value),
-            len(previous_cookie_value),
-        )
+        if device_cookie_loaded:
+            previous_cookie_value = device_cookie_value
+        else:
+            previous_cookie_value = device_check.read_header_cookie(device_cookie_name)
         today_date_code = device_check.get_today_date_code()
         other_student_ids = device_check.get_other_student_ids_today(
             previous_cookie_value, today_date_code, draft_student_id
+        )
+        logger.info(
+            "Duplicate check: browser_cookie_loaded=%s, cookie_present=%s, other_students=%d",
+            device_cookie_loaded,
+            bool(previous_cookie_value),
+            len(other_student_ids),
         )
 
         attendance_result = gsheets_api.mark_attendance(
@@ -537,83 +637,33 @@ elif st.session_state.checkin_step == "confirm":
                 previous_cookie_value, today_date_code, draft_student_id
             )
 
+            # Từ đây trang ở trạng thái "done": nếu có rerun bất ngờ, form nhập
+            # không bao giờ quay lại và không thể gửi lần hai.
+            st.session_state.checkin_step = "done"
+            st.session_state.done_student_name = attendance_result.student_name
+            st.session_state.done_cookie_value = new_cookie_value
+
             # Thay thế trực tiếp khung xác nhận bằng khung thông báo thành công
             # Không gọi st.rerun() để giữ nguyên phiên kích hoạt đóng trang của trình duyệt
             with step_placeholder.container():
-                st.markdown(f"""
-                <div class="confirm-card">
-                    <div class="confirm-card-title" style="font-size: 1.3rem;">
-                        ĐIỂM DANH THÀNH CÔNG
-                    </div>
-                    <div class="confirm-card-subtitle">
-                        Đã ghi nhận vào hệ thống
-                    </div>
-                    <div class="info-field-box" style="text-align: center;">
-                        <div class="info-field-value">
-                            {html.escape(draft_student_id)} — {html.escape(attendance_result.student_name)}
-                        </div>
-                    </div>
-                    <div id="auto-exit-status" style="color: #1488DB; font-weight: 600; font-size: 0.95rem; margin-top: 12px;">
-                        Tự động đóng trang sau 2 giây...
-                    </div>
-                    <div class="countdown-track">
-                        <div class="countdown-bar"></div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                # Ghi nhớ thiết bị đã dùng cho mã sinh viên này hôm nay, rồi hẹn giờ đóng trang
-                st.html(f"""
-                <script>
-                    (function() {{
-                        const parentWindow = window;
-                        const parentDocument = parentWindow.document;
-
-                        parentDocument.cookie = "{cookie_name}={new_cookie_value}; max-age={device_check.COOKIE_LIFETIME_SECONDS}; path=/; SameSite=Lax";
-
-                        if (parentWindow._studentExitTimer) {{
-                            parentWindow.clearTimeout(parentWindow._studentExitTimer);
-                        }}
-
-                        function triggerExit() {{
-                            const userAgent = navigator.userAgent || "";
-                            const isAndroid = /Android/i.test(userAgent);
-
-                            // 1. Thử đóng cửa sổ/tab hiện tại
-                            try {{
-                                parentWindow.open('', '_self', '');
-                                parentWindow.close();
-                            }} catch (error) {{}}
-                            try {{
-                                window.top.close();
-                            }} catch (error) {{}}
-
-                            // 2. Trên Android: thoát thẳng ra Màn hình chính
-                            if (isAndroid) {{
-                                try {{
-                                    window.top.location.href = "intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.HOME;end";
-                                }} catch (error) {{}}
-                            }}
-
-                            // 3. Lùi về tác vụ trước nếu có trong lịch sử trình duyệt
-                            setTimeout(function() {{
-                                try {{
-                                    if (window.top.history.length > 1) {{
-                                        window.top.history.back();
-                                    }}
-                                }} catch (error) {{}}
-
-                                const statusElement = parentDocument.getElementById('auto-exit-status');
-                                if (statusElement) {{
-                                    statusElement.innerText = "Đã hoàn tất điểm danh.";
-                                }}
-                            }}, 250);
-                        }}
-
-                        parentWindow._studentExitTimer = parentWindow.setTimeout(triggerExit, 2000);
-                    }})();
-                </script>
-                """, unsafe_allow_javascript=True)
+                render_success_card(
+                    draft_student_id,
+                    attendance_result.student_name,
+                    device_cookie_name,
+                    new_cookie_value,
+                )
         else:
             show_message(attendance_result.message)
             st.html(RESTORE_SEND_BUTTON_SCRIPT, unsafe_allow_javascript=True)
+
+# ====================================================
+# BƯỚC 3: ĐÃ ĐIỂM DANH XONG (chỉ hiện lại khi trang bị chạy lại)
+# ====================================================
+elif st.session_state.checkin_step == "done":
+    with step_placeholder.container():
+        render_success_card(
+            st.session_state.draft_student_id,
+            st.session_state.done_student_name,
+            device_cookie_name,
+            st.session_state.done_cookie_value,
+        )

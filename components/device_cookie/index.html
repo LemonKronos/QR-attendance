@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<body>
+<script>
+// Tiny Streamlit component: reads ONE cookie from the browser and reports it
+// to Python exactly once. It never writes anything and never reports again,
+// so it cannot cause repeated reruns of the student page.
+function send(type, data) {
+    window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data), "*");
+}
+
+function readCookie(name) {
+    const parts = document.cookie ? document.cookie.split("; ") : [];
+    for (const part of parts) {
+        const separatorIndex = part.indexOf("=");
+        if (part.slice(0, separatorIndex) === name) {
+            try {
+                return decodeURIComponent(part.slice(separatorIndex + 1));
+            } catch (error) {
+                return part.slice(separatorIndex + 1);
+            }
+        }
+    }
+    return "";
+}
+
+let alreadyReported = false;
+
+window.addEventListener("message", function (event) {
+    if (!event.data || event.data.type !== "streamlit:render") return;
+    if (alreadyReported) return;
+    alreadyReported = true;
+    const args = event.data.args || {};
+    send("streamlit:setFrameHeight", { height: 0 });
+    send("streamlit:setComponentValue", {
+        value: { loaded: true, value: readCookie(args.cookie_name || "") },
+        dataType: "json",
+    });
+});
+
+send("streamlit:componentReady", { apiVersion: 1 });
+send("streamlit:setFrameHeight", { height: 0 });
+</script>
+</body>
+</html>

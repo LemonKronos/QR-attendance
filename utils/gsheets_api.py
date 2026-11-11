@@ -44,7 +44,7 @@ SHEET_URL = _get_setting("SHEET_URL", DEFAULT_SHEET_URL)
 HEADER_STUDENT_ID = "Mã SV"
 HEADER_STUDENT_NAME = "Họ Tên"
 PRESENT_MARK = "X"
-DUPLICATE_DEVICE_MARK = "FLAG: Duplicate Device"
+DUPLICATE_DEVICE_MARK = "Duplicate Device"
 
 # 1.0 means identical. Names are compared without accents and upper/lower case.
 NAME_SIMILARITY_THRESHOLD = 0.8
@@ -355,7 +355,7 @@ def _mark_attendance_while_locked(
         other_name = other_row_values[1].strip() if len(other_row_values) > 1 else ""
         other_students.append((other_id, other_name, other_row_number, other_row_values))
 
-    # ---- this student's own cell:  "FLAG: Duplicate Device: previously by A-id - A-name"
+    # ---- this student's own cell:  "Duplicate Device: previously by A-id - A-name"
     own_note = ""
     if other_students:
         previous_text = ", ".join(_describe(i, n) for i, n, _r, _v in other_students)
