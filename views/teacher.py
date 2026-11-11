@@ -3,6 +3,7 @@ import io
 import logging
 import math
 import time
+import socket
 
 import streamlit as st
 
@@ -81,8 +82,31 @@ def render_qr_countdown():
     )
 
 
+def get_local_ip_address() -> str:
+    udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        udp_socket.connect(("10.255.255.255", 1))
+        return udp_socket.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+    finally:
+        udp_socket.close()
+
+
 def get_default_base_url() -> str:
-    return "https://qr-attendance-laeasy.streamlit.app"
+    # 1. Try the configured public URL (Streamlit Cloud)
+    try:
+        public_url = st.secrets["PUBLIC_BASE_URL"]
+        if public_url:
+            return public_url.rstrip("/")
+    except (FileNotFoundError, KeyError):
+        pass
+    except st.errors.StreamlitSecretNotFoundError:
+        pass
+
+    # 2. Local development fallback
+    server_port = st.get_option("server.port")
+    return f"http://{get_local_ip_address()}:{server_port}"
 
 
 def normalize_base_url(typed_base_url: str) -> str:

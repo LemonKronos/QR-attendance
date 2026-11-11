@@ -14,7 +14,7 @@ Hệ thống cung cấp giải pháp tự động ghi nhận giờ vào lớp c�
     *   Trang sinh viên nằm ở một đường dẫn ngẫu nhiên, không đoán được (`/checkin-xxxxxxxxxxxxxxxx`), chỉ xuất hiện trong mã QR.
     *   Trang giảng viên ở `/teacher`, có mật khẩu, chặn thử mật khẩu liên tục, và **không có liên kết nào dẫn tới** từ các trang khác.
 *   **Kiểm tra họ tên thông minh:** Mã sinh viên phải khớp tuyệt đối. Nếu mã đã có trong Google Sheets, họ tên nhập vào được so sánh không phân biệt hoa/thường và dấu: sai nhẹ (gõ sai chữ, thiếu dấu) sẽ được **tự sửa theo tên trong sheet** và chấp nhận; khác hẳn thì bị từ chối.
-*   **Chống Gian Lận Âm Thầm (Anti-Cheat):** Hệ thống dùng Cookie để nhận diện thiết bị. Nếu **trong cùng một ngày** một thiết bị điểm danh cho một mã sinh viên **khác**, hệ thống vẫn ghi nhận nhưng gắn cờ `FLAG: Duplicate Device` trên Google Sheets. **Sinh viên không hề thấy thông báo nào về việc bị gắn cờ.** Sang ngày khác thì không gắn cờ.
+*   **Chống Gian Lận Âm Thầm (Anti-Cheat):** Hệ thống dùng Cookie để nhận diện thiết bị. Nếu **trong cùng một ngày** một thiết bị điểm danh cho một mã sinh viên **khác**, hệ thống vẫn ghi nhận nhưng gắn cờ `FLAG: Duplicate Device` trên Google Sheets (cả hai bên: dòng mới ghi "previously by ID - Tên", dòng cũ được nối thêm "also registered for ID - Tên"). **Sinh viên không hề thấy thông báo nào về việc bị gắn cờ.** Sang ngày khác thì không gắn cờ.
 
 ---
 

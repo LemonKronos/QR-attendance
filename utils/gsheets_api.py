@@ -1,4 +1,3 @@
-import datetime
 import difflib
 import logging
 import threading
@@ -11,6 +10,8 @@ from pathlib import Path
 import gspread
 import streamlit as st
 from google.oauth2.service_account import Credentials
+
+from utils import clock
 
 logger = logging.getLogger(__name__)
 
@@ -265,8 +266,39 @@ def _write_cell(worksheet, row_number: int, column_number: int, value: str) -> N
     )
 
 
+def _find_student_row(all_rows, student_id: str):
+    for row_number, row_values in enumerate(all_rows[1:], start=2):
+        if row_values and row_values[0].strip() == student_id:
+            return row_number, row_values
+    return None, []
+
+
+def _get_cell_text(row_values, column_number: int) -> str:
+    if len(row_values) >= column_number:
+        return row_values[column_number - 1].strip()
+    return ""
+
+
+def _describe(student_id: str, student_name: str) -> str:
+    return f"{student_id} - {student_name}" if student_name else student_id
+
+
+def _merge_flag(existing_mark: str, note: str) -> str:
+    """Turn a cell into a duplicate flag, or add one more note to an existing flag.
+
+    An "X" becomes the flag (a flagged student is of course also present).
+    The same note is never added twice, so re-submitting changes nothing.
+    """
+    existing_mark = existing_mark.strip()
+    if existing_mark.startswith(DUPLICATE_DEVICE_MARK):
+        if note in existing_mark:
+            return existing_mark
+        return f"{existing_mark}; {note}"
+    return f"{DUPLICATE_DEVICE_MARK}: {note}"
+
+
 def _mark_attendance_while_locked(
-    class_name: str, student_id: str, student_name: str, is_flagged: bool
+    class_name: str, student_id: str, student_name: str, other_student_ids: list
 ) -> AttendanceResult:
     worksheet = _get_worksheet(class_name)
     all_rows = _call_with_retry(worksheet.get_all_values)
@@ -282,7 +314,7 @@ def _mark_attendance_while_locked(
             header_row.append(required_title)
             header_was_changed = True
 
-    today_label = datetime.datetime.now().strftime("%d-%b-%Y")
+    today_label = clock.now().strftime("%d-%b-%Y")
     if today_label in header_row:
         today_column_number = header_row.index(today_label) + 1
     else:
@@ -300,52 +332,71 @@ def _mark_attendance_while_locked(
         )
 
     # ---- find the student: the ID must match exactly
-    student_row_number = None
-    student_row_values = []
-    for row_number, row_values in enumerate(all_rows[1:], start=2):
-        if row_values and row_values[0].strip() == student_id:
-            student_row_number = row_number
-            student_row_values = row_values
-            break
+    student_row_number, student_row_values = _find_student_row(all_rows, student_id)
 
-    attendance_mark = DUPLICATE_DEVICE_MARK if is_flagged else PRESENT_MARK
-
-    # ---- new student: add a row
+    # ---- known student: check the name, fix small typos, reject different names.
+    # This happens BEFORE anything is written, so a rejected name never flags anybody.
     if student_row_number is None:
-        blank_cells_before_today = [""] * (today_column_number - 3)
-        new_row = [student_id, student_name] + blank_cells_before_today + [attendance_mark]
-        _call_with_retry(lambda: worksheet.append_row(new_row, value_input_option="RAW"))
-        return AttendanceResult(True, "Thành công", student_name)
-
-    # ---- known student: check the name, fix small typos, reject different names
-    stored_name = student_row_values[1].strip() if len(student_row_values) > 1 else ""
-    if stored_name:
-        if not names_are_similar(student_name, stored_name):
-            return AttendanceResult(False, NAME_MISMATCH_MESSAGE)
-        official_name = stored_name
-    else:
         official_name = student_name
-        _write_cell(worksheet, student_row_number, 2, official_name)
+    else:
+        stored_name = student_row_values[1].strip() if len(student_row_values) > 1 else ""
+        if stored_name:
+            if not names_are_similar(student_name, stored_name):
+                return AttendanceResult(False, NAME_MISMATCH_MESSAGE)
+            official_name = stored_name
+        else:
+            official_name = student_name
+            _write_cell(worksheet, student_row_number, 2, official_name)
 
-    # ---- write the mark. A re-submit can never erase an existing mark, and a
-    # flag can never be washed away by checking in again; only "X" -> flag is allowed.
-    has_today_cell = len(student_row_values) >= today_column_number
-    existing_mark = student_row_values[today_column_number - 1].strip() if has_today_cell else ""
-    should_write_mark = not existing_mark or (
-        is_flagged and existing_mark != DUPLICATE_DEVICE_MARK
-    )
-    if should_write_mark:
-        _write_cell(worksheet, student_row_number, today_column_number, attendance_mark)
+    # ---- who else used this device today? (A, when this entry is B)
+    other_students = []
+    for other_id in other_student_ids:
+        other_row_number, other_row_values = _find_student_row(all_rows, other_id)
+        other_name = other_row_values[1].strip() if len(other_row_values) > 1 else ""
+        other_students.append((other_id, other_name, other_row_number, other_row_values))
+
+    # ---- this student's own cell:  "FLAG: Duplicate Device: previously by A-id - A-name"
+    own_note = ""
+    if other_students:
+        previous_text = ", ".join(_describe(i, n) for i, n, _r, _v in other_students)
+        own_note = f"previously by {previous_text}"
+
+    if student_row_number is None:
+        mark = _merge_flag("", own_note) if own_note else PRESENT_MARK
+        blank_cells_before_today = [""] * (today_column_number - 3)
+        new_row = [student_id, official_name] + blank_cells_before_today + [mark]
+        _call_with_retry(lambda: worksheet.append_row(new_row, value_input_option="RAW"))
+    else:
+        existing_mark = _get_cell_text(student_row_values, today_column_number)
+        if own_note:
+            new_mark = _merge_flag(existing_mark, own_note)
+        else:
+            # A re-submit can never erase an existing mark.
+            new_mark = existing_mark or PRESENT_MARK
+        if new_mark != existing_mark:
+            _write_cell(worksheet, student_row_number, today_column_number, new_mark)
+
+    # ---- the earlier students' cells (A): "... also registered for B-id - B-name"
+    new_student_text = _describe(student_id, official_name)
+    for _other_id, _other_name, other_row_number, other_row_values in other_students:
+        if other_row_number is None:
+            continue
+        other_existing_mark = _get_cell_text(other_row_values, today_column_number)
+        other_new_mark = _merge_flag(other_existing_mark, f"also registered for {new_student_text}")
+        if other_new_mark != other_existing_mark:
+            _write_cell(worksheet, other_row_number, today_column_number, other_new_mark)
 
     return AttendanceResult(True, "Thành công", official_name)
 
 
 def mark_attendance(
-    class_name: str, student_id: str, student_name: str, is_flagged: bool = False
+    class_name: str, student_id: str, student_name: str, other_student_ids: list = ()
 ) -> AttendanceResult:
     try:
         with _sheet_lock:
-            return _mark_attendance_while_locked(class_name, student_id, student_name, is_flagged)
+            return _mark_attendance_while_locked(
+                class_name, student_id, student_name, list(other_student_ids)
+            )
     except UserFacingError as error:
         return AttendanceResult(False, str(error))
     except gspread.exceptions.APIError as error:

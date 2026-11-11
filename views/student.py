@@ -1,10 +1,13 @@
 import html
 import time
+import logging
 
 import streamlit as st
 
 from utils import device_check, gsheets_api, security
 from utils.ui_helpers import force_light_inputs
+
+logger = logging.getLogger(__name__)
 
 st.set_page_config(
     page_title="Điểm Danh Sinh Viên",
@@ -446,6 +449,10 @@ elif st.session_state.checkin_step == "confirm":
     draft_student_name = st.session_state.draft_student_name
 
     with step_placeholder.container():
+        # Read this device's cookies from the browser while the page is shown,
+        # so they are already loaded by the time the student presses "Gửi".
+        browser_cookies = device_check.load_browser_cookies()
+
         st.markdown(f"""
         <div class="confirm-card">
             <div class="confirm-card-title">XÁC NHẬN THÔNG TIN</div>
@@ -507,9 +514,14 @@ elif st.session_state.checkin_step == "confirm":
         # Kiểm tra thiết bị (âm thầm): chỉ đánh dấu khi CHÍNH THIẾT BỊ NÀY đã điểm danh
         # cho một mã sinh viên KHÁC trong CÙNG NGÀY. Sang ngày khác thì không đánh dấu.
         cookie_name = device_check.get_cookie_name(class_name)
-        previous_cookie_value = st.context.cookies.get(cookie_name, "")
+        previous_cookie_value = device_check.read_device_cookie(cookie_name, browser_cookies)
+        logger.info(
+            "Duplicate check: cookie_received=%s, cookie_length=%d",
+            bool(previous_cookie_value),
+            len(previous_cookie_value),
+        )
         today_date_code = device_check.get_today_date_code()
-        is_flagged = device_check.should_flag_duplicate_device(
+        other_student_ids = device_check.get_other_student_ids_today(
             previous_cookie_value, today_date_code, draft_student_id
         )
 
@@ -517,7 +529,7 @@ elif st.session_state.checkin_step == "confirm":
             class_name,
             draft_student_id,
             draft_student_name,
-            is_flagged
+            other_student_ids
         )
 
         if attendance_result.success:
