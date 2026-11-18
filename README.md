@@ -101,8 +101,8 @@ Khi chạy cục bộ có thể đặt mật khẩu bằng biến môi trường
 
 | Thông số | File | Mặc định |
 |---|---|---|
-| Chu kỳ đổi QR / số khung cũ được chấp nhận | `utils/security.py`: `QR_ROTATION_SECONDS`, `QR_ACCEPTED_PREVIOUS_SLOTS` | 20 s / 1 |
-| Chu kỳ đổi mã xác nhận / số mã cũ được chấp nhận | `SCREEN_CODE_PERIOD_SECONDS`, `SCREEN_CODE_ACCEPTED_PREVIOUS` | 10 s / 1 |
+| Chu kỳ đổi QR / số khung cũ được chấp nhận | `utils/security.py`: `QR_ROTATION_SECONDS`, `QR_ACCEPTED_PREVIOUS_SLOTS` | 30 s / 1 |
+| Chu kỳ đổi mã xác nhận / số mã cũ được chấp nhận | `SCREEN_CODE_PERIOD_SECONDS`, `SCREEN_CODE_ACCEPTED_PREVIOUS` | 13 s / 1 |
 | Thời lượng một phiên; thời gian sinh viên được nhập thông tin | `QR_VALIDITY_SECONDS`, `STUDENT_FORM_SECONDS` | 600 s |
 | Bán kính GPS; ngưỡng độ chính xác "quá mờ" | `utils/class_session.py`: `GPS_RADIUS_METERS`, `GPS_LOW_ACCURACY_METERS` | 500 m / 1000 m |
 
