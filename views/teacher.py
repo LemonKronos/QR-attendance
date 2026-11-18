@@ -7,7 +7,7 @@ import socket
 
 import streamlit as st
 
-from utils import gsheets_api, security
+from utils import class_session, geo, gsheets_api, security
 from utils.ui_helpers import force_light_inputs
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,13 @@ SESSION_DEFAULTS = {
     "current_class": "",
     "qr_url": "",
     "qr_image_bytes": b"",
-    "qr_created_at": 0.0,
+    "qr_base_url": "",
+    "qr_slot": -1,
+    # Teacher GPS (see render_location_panel)
+    "geo_nonce": 0,
+    "geo_wait_nonce": 0,
+    "location_message": "",
+    "pending_location": None,
 }
 for session_key, default_value in SESSION_DEFAULTS.items():
     if session_key not in st.session_state:
@@ -45,37 +51,78 @@ def show_notice(text: str):
 
 
 @st.fragment(run_every=1)
-def render_qr_countdown():
-    """Refresh only the countdown every second without rerunning the whole page."""
+def render_live_qr():
+    """The QR display. Reruns every second WITHOUT rerunning the whole page.
+
+    Every second it: deletes expired sessions (and their GPS data), updates the
+    countdown, and builds a new QR image when the 10-second slot has changed.
+    The 4-digit on-screen code is shown here too.
+    """
     if not st.session_state.get("qr_active"):
         return
 
-    created_at = float(st.session_state.get("qr_created_at", 0.0) or 0.0)
-    if created_at <= 0:
+    class_session.sweep_expired()
+    class_name = st.session_state.current_class
+    escaped_class_name = html.escape(class_name)
+    session = class_session.get_open_session(class_name)
+
+    if session is None:
+        st.markdown(
+            f"""
+            <div class="qr-container-box">
+                <div class="qr-class-title">Lớp: {escaped_class_name}</div>
+                <div class="qr-sub-text" style="color: #B42318;">
+                    Phiên điểm danh đã kết thúc. Hãy tạo mã mới để tiếp tục điểm danh.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         return
 
-    elapsed_seconds = max(0.0, time.time() - created_at)
-    remaining_seconds = max(
-        0,
-        math.ceil(security.QR_VALIDITY_SECONDS - elapsed_seconds),
-    )
-    minutes, seconds = divmod(remaining_seconds, 60)
-    escaped_class_name = html.escape(st.session_state.current_class)
+    if security.current_qr_slot() != st.session_state.qr_slot or not st.session_state.qr_image_bytes:
+        try:
+            build_qr_for_current_slot(session)
+        except Exception:
+            logger.exception("[QR] Could not rebuild the rotating QR image")
 
-    if remaining_seconds > 0:
-        timer_text = f"Thời gian còn lại: {minutes:02d}:{seconds:02d}"
-        timer_color = "#1488DB"
-    else:
-        timer_text = "Mã QR đã hết hạn. Hãy tạo mã mới để tiếp tục điểm danh."
-        timer_color = "#B42318"
+    remaining_seconds = max(0, math.ceil(session.expires_at - time.time()))
+    minutes, seconds = divmod(remaining_seconds, 60)
+    screen_code, code_seconds_left = security.get_screen_code(session.class_name, session.session_id)
 
     st.markdown(
         f"""
         <div class="qr-container-box">
             <div class="qr-class-title">Lớp: {escaped_class_name}</div>
-            <div class="qr-sub-text" style="color: {timer_color};">
-                {timer_text}
+            <div class="qr-sub-text" style="margin-bottom: 0;">
+                Thời gian còn lại: {minutes:02d}:{seconds:02d}
             </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    _, qr_column, _ = st.columns([1, 3, 1])
+    with qr_column:
+        if st.session_state.qr_image_bytes:
+            st.image(io.BytesIO(st.session_state.qr_image_bytes), width=350)
+
+    st.markdown(
+        f"""
+        <div class="screen-code-box">
+            <div class="qr-sub-text" style="margin-bottom: 4px;">
+                Mã xác nhận (sinh viên nhập sau khi quét QR) — đổi sau {code_seconds_left} giây
+            </div>
+            <div class="screen-code">{html.escape(screen_code)}</div>
+        </div>
+        <div class="url-outline-box">
+            <span style="color: #030391; font-weight: 700; font-size: 0.92rem;">
+                Đường dẫn kiểm thử của mã QR hiện tại (đổi mỗi {security.QR_ROTATION_SECONDS} giây):
+            </span><br/>
+            <a href="{html.escape(st.session_state.qr_url, quote=True)}" target="_blank" rel="noopener noreferrer"
+               style="color: #1488DB; font-weight: 600; text-decoration: none; font-size: 0.92rem;">
+                {html.escape(st.session_state.qr_url)}
+            </a>
         </div>
         """,
         unsafe_allow_html=True,
@@ -133,19 +180,27 @@ def make_qr_png_bytes(url: str) -> bytes:
     return png_bytes
 
 
-def generate_new_qr(tab_name: str, base_url: str):
-    # Start the countdown when the signed token is created, not after PNG rendering.
-    created_at = float(int(time.time()))
-    token = security.generate_qr_token(tab_name)
+def build_qr_for_current_slot(session) -> None:
+    """Build the QR image for the current 10-second slot (a fresh signed token)."""
+    token = security.generate_qr_token(session.class_name, session.session_id, session.expires_at)
     student_path = security.get_student_page_path()
-    url = f"{base_url.rstrip('/')}/{student_path}?token={token}"
+    url = f"{st.session_state.qr_base_url}/{student_path}?token={token}"
     qr_png_bytes = make_qr_png_bytes(url)
 
     # Replace the current QR atomically only after both URL and image are ready.
-    st.session_state.current_class = tab_name
     st.session_state.qr_url = url
     st.session_state.qr_image_bytes = qr_png_bytes
-    st.session_state.qr_created_at = created_at
+    st.session_state.qr_slot = security.current_qr_slot()
+
+
+def generate_new_qr(tab_name: str, base_url: str):
+    # Starts a session, or RENEWS the running one: the 10-minute clock restarts
+    # and the stored GPS locations are kept.
+    session = class_session.start_session(tab_name)
+    st.session_state.current_class = session.class_name
+    st.session_state.qr_base_url = base_url.rstrip("/")
+    st.session_state.qr_slot = -1
+    build_qr_for_current_slot(session)
     st.session_state.qr_active = True
 
 
@@ -181,6 +236,107 @@ def request_new_qr(typed_class_name: str, typed_base_url: str) -> str:
     except Exception as error:
         logger.exception("[QR] Failed during QR generation after %.2fs", time.monotonic() - started_at)
         return f"Không thể tạo mã QR ({type(error).__name__}): {error}"
+
+
+def handle_teacher_location_result(class_name: str, result) -> None:
+    """Store the lecturer's location (once per button press) and refresh the flags."""
+    if result.status != "ok":
+        if result.status == "denied":
+            st.session_state.location_message = (
+                "Trình duyệt từ chối quyền vị trí. Hãy cho phép vị trí cho trang này "
+                "(biểu tượng ổ khóa cạnh thanh địa chỉ) rồi bấm lại."
+            )
+        else:
+            st.session_state.location_message = (
+                "Không lấy được vị trí. Máy tính thường có GPS kém hoặc bị tắt; "
+                "hãy thử bằng điện thoại."
+            )
+        return
+
+    accuracy = float(result.accuracy or 0.0)
+    old_accuracy = class_session.get_teacher_status(class_name).get("accuracy", 0.0)
+    outcome = class_session.set_teacher_location(class_name, result.latitude, result.longitude, accuracy)
+
+    if outcome == class_session.OUTCOME_NO_SESSION:
+        st.session_state.location_message = "Phiên điểm danh của lớp này đã kết thúc. Hãy tạo mã QR mới."
+    elif outcome == class_session.OUTCOME_KEPT_BETTER:
+        st.session_state.pending_location = (class_name, result.latitude, result.longitude, accuracy)
+        st.session_state.location_message = (
+            f"Vị trí mới kém chính xác hơn (±{accuracy:.0f} m) so với vị trí đã lưu "
+            f"(±{old_accuracy:.0f} m) nên vẫn giữ vị trí cũ."
+        )
+    else:
+        st.session_state.pending_location = None
+        st.session_state.location_message = apply_new_teacher_location_message(class_name, accuracy)
+
+
+def apply_new_teacher_location_message(class_name: str, accuracy: float) -> str:
+    with st.spinner("Đang cập nhật cờ GPS cho sinh viên..."):
+        update_result = class_session.recompute_all_gps_flags(class_name)
+    if update_result.success:
+        return f"Đã đặt vị trí lớp học (±{accuracy:.0f} m) và cập nhật cờ GPS."
+    return (
+        f"Đã đặt vị trí lớp học (±{accuracy:.0f} m) nhưng chưa cập nhật được Google Sheet: "
+        f"{update_result.message}"
+    )
+
+
+def render_location_panel(typed_class_name: str) -> None:
+    """Button that stores THIS device's location as the classroom location."""
+    st.markdown('<div class="section-title">Vị trí lớp học (GPS)</div>', unsafe_allow_html=True)
+    class_name = typed_class_name or st.session_state.current_class
+
+    # Fixed place on every run. Idle until the button raises geo_nonce.
+    geo_result = geo.locate("teacher_geo", st.session_state.geo_nonce, timeout_ms=20000)
+    waiting = st.session_state.geo_wait_nonce == st.session_state.geo_nonce > 0
+    if waiting and geo_result is not None:
+        st.session_state.geo_wait_nonce = 0
+        waiting = False
+        handle_teacher_location_result(class_name, geo_result)
+
+    status = class_session.get_teacher_status(class_name) if class_name else {"session_open": False}
+
+    if status.get("session_open") and status.get("has_location"):
+        show_notice(
+            f"Đã đặt vị trí lớp học (±{status['accuracy']:.0f} m). "
+            f"Sinh viên đã gửi vị trí: {status['students_with_location']}/{status['students_total']}."
+        )
+    elif status.get("session_open"):
+        show_notice("Chưa đặt vị trí lớp học. Khi chưa đặt, không ai bị gắn cờ GPS.")
+    else:
+        st.caption(
+            "Tạo mã QR trước, rồi bấm nút bên dưới trên điện thoại (GPS điện thoại chính xác hơn "
+            "máy tính). Nút này dùng được trên cả máy tính lẫn điện thoại."
+        )
+
+    if st.button("Đặt vị trí thiết bị này làm vị trí lớp học", key="set_teacher_location", use_container_width=True):
+        if not class_name:
+            st.session_state.location_message = "Vui lòng nhập tên lớp."
+        elif not status.get("session_open"):
+            st.session_state.location_message = (
+                "Lớp này chưa có phiên điểm danh đang chạy. Hãy tạo mã QR trước."
+            )
+        else:
+            st.session_state.geo_nonce += 1
+            st.session_state.geo_wait_nonce = st.session_state.geo_nonce
+            st.session_state.location_message = ""
+            st.session_state.pending_location = None
+            st.rerun()
+
+    if waiting:
+        show_notice("Đang xác định vị trí... Hãy chọn Cho phép nếu trình duyệt hỏi.")
+
+    pending = st.session_state.pending_location
+    if pending and pending[0] == class_name:
+        if st.button("Vẫn dùng vị trí kém chính xác hơn này", type="secondary", use_container_width=True):
+            _, latitude, longitude, accuracy = pending
+            class_session.set_teacher_location(class_name, latitude, longitude, accuracy, force=True)
+            st.session_state.pending_location = None
+            st.session_state.location_message = apply_new_teacher_location_message(class_name, accuracy)
+            st.rerun()
+
+    if st.session_state.location_message:
+        show_notice(st.session_state.location_message)
 
 
 st.markdown("""
@@ -395,6 +551,28 @@ st.markdown("""
         display: block;
         margin: 0 auto;
     }
+    .screen-code-box {
+        background-color: transparent !important;
+        border: 2px solid var(--primary-dark);
+        border-radius: 18px;
+        padding: 14px 20px;
+        margin-top: 12px;
+        text-align: center;
+    }
+    .screen-code {
+        color: var(--primary-dark);
+        font-size: 3.2rem;
+        font-weight: 700;
+        letter-spacing: 14px;
+        padding-left: 14px;
+        line-height: 1.1;
+    }
+    .section-title {
+        color: var(--primary-dark);
+        font-size: 1.15rem;
+        font-weight: 700;
+        margin: 22px 0 8px 0;
+    }
     .url-outline-box {
         background-color: transparent !important;
         border: 1.5px solid var(--primary-light);
@@ -433,6 +611,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 force_light_inputs()
+
+# Lazy cleanup: delete expired attendance sessions (and their GPS data).
+class_session.sweep_expired()
 
 
 # SIGN-IN
@@ -545,6 +726,8 @@ else:
                     st.rerun()
         with stop_column:
             if st.button("Tắt mã QR", type="secondary", use_container_width=True):
+                # Stopping deletes this session's GPS data (flags stay in the sheet).
+                class_session.stop_session(st.session_state.current_class)
                 st.session_state.qr_active = False
                 st.session_state.qr_image_bytes = b""
                 st.session_state.qr_url = ""
@@ -559,38 +742,8 @@ else:
     if qr_error_message:
         show_notice(qr_error_message)
 
-    # Display only the complete, per-session attendance link generated above.
-    if st.session_state.qr_active and st.session_state.qr_image_bytes:
-        # The fragment updates the timer every second; the QR image and URL stay still.
-        render_qr_countdown()
-        escaped_qr_url = html.escape(st.session_state.qr_url, quote=True)
+    # The live QR (rotating token + on-screen code). It refreshes by itself.
+    if st.session_state.qr_active:
+        render_live_qr()
 
-        # Use Streamlit's image element. Avoid HTML data: URLs and iframe scripts
-        # for the actual QR image; those were the fragile part of the old display.
-        _, qr_column, _ = st.columns([1, 3, 1])
-        with qr_column:
-            try:
-                # st.image accepts a BytesIO stream for encoded PNG data.
-                st.image(io.BytesIO(st.session_state.qr_image_bytes), width=350)
-            except Exception:
-                logger.exception("[QR] PNG was generated but Streamlit failed to display it")
-                st.error(
-                    "Mã QR đã được tạo nhưng không thể hiển thị. "
-                    "Hãy xem terminal để biết lỗi chi tiết."
-                )
-
-        st.markdown(
-            f"""
-            <div class="url-outline-box">
-                <span style="color: #030391; font-weight: 700; font-size: 0.92rem;">
-                    Đường dẫn kiểm thử của mã QR hiện tại:
-                </span><br/>
-                <a href="{escaped_qr_url}" target="_blank" rel="noopener noreferrer"
-                   style="color: #1488DB; font-weight: 600; text-decoration: none; font-size: 0.92rem;">
-                    {escaped_qr_url}
-                </a>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
+    render_location_panel(typed_class_name)

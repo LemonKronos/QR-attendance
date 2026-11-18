@@ -4,7 +4,7 @@ import logging
 
 import streamlit as st
 
-from utils import device_check, gsheets_api, security
+from utils import class_session, device_check, geo, gsheets_api, security
 from utils.ui_helpers import force_light_inputs
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,11 @@ SESSION_DEFAULTS = {
     "device_wait_warned": False,
     "done_student_name": "",
     "done_cookie_value": "",
+    "verified_session_id": "",
+    "screen_code_ok": False,
+    "geo_nonce": 0,
+    "locating": False,
+    "location_received": True,
 }
 for session_key, default_value in SESSION_DEFAULTS.items():
     if session_key not in st.session_state:
@@ -40,12 +45,23 @@ def show_message(text: str):
     )
 
 
-def render_success_card(student_id: str, student_name: str, cookie_name: str, cookie_value: str):
+def render_success_card(
+    student_id: str, student_name: str, cookie_name: str, cookie_value: str, auto_close: bool = True
+):
     """Success card + cookie write + auto-close timer.
 
     Used right after sending AND on any later rerun (checkin_step == "done"),
     so a rerun can never bring the entry form back or allow a second send.
     """
+    auto_close_html = """
+        <div id="auto-exit-status" style="color: #1488DB; font-weight: 600; font-size: 0.95rem; margin-top: 12px;">
+            Tự động đóng trang sau 2 giây...
+        </div>
+        <div class="countdown-track">
+            <div class="countdown-bar"></div>
+        </div>
+    """ if auto_close else ""
+
     st.markdown(f"""
     <div class="confirm-card">
         <div class="confirm-card-title" style="font-size: 1.3rem;">
@@ -59,14 +75,21 @@ def render_success_card(student_id: str, student_name: str, cookie_name: str, co
                 {html.escape(student_id)} — {html.escape(student_name)}
             </div>
         </div>
-        <div id="auto-exit-status" style="color: #1488DB; font-weight: 600; font-size: 0.95rem; margin-top: 12px;">
-            Tự động đóng trang sau 2 giây...
-        </div>
-        <div class="countdown-track">
-            <div class="countdown-bar"></div>
-        </div>
+        {auto_close_html}
     </div>
     """, unsafe_allow_html=True)
+
+    if not auto_close:
+        # Location was not received: keep the page open so the student can allow
+        # location and press Send again (the entry is simply updated).
+        st.markdown(
+            '<div class="outlined-message">Chưa lấy được vị trí của bạn. Hãy cho phép trang này '
+            'dùng vị trí (biểu tượng ổ khóa cạnh thanh địa chỉ) rồi bấm "Gửi lại".</div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("Gửi lại", use_container_width=True, key="resend_with_location"):
+            st.session_state.checkin_step = "confirm"
+            st.rerun()
 
     # Ghi nhớ thiết bị đã dùng cho mã sinh viên này hôm nay, rồi hẹn giờ đóng trang
     st.html(f"""
@@ -76,6 +99,12 @@ def render_success_card(student_id: str, student_name: str, cookie_name: str, co
             const parentDocument = parentWindow.document;
 
             parentDocument.cookie = "{cookie_name}={cookie_value}; max-age={device_check.COOKIE_LIFETIME_SECONDS}; path=/; SameSite=Lax";
+            // Same value in localStorage: a browser may block one but not the other.
+            try {{ parentWindow.localStorage.setItem("{cookie_name}", "{cookie_value}"); }} catch (error) {{}}
+
+            if (!{str(auto_close).lower()}) {{
+                return;
+            }}
 
             // Only ever arm ONE exit timer, even if this script runs again.
             if (parentWindow._studentExitTimer) {{
@@ -446,8 +475,17 @@ if not st.session_state.verified_class_name:
         show_message(token_check.message)
         st.stop()
 
+    if class_session.is_session_closed(token_check.session_id):
+        show_message("Phiên điểm danh đã kết thúc. Vui lòng xin giảng viên mã mới.")
+        st.stop()
+
+    # The QR only had to be valid when the page was OPENED. From now on the
+    # student has STUDENT_FORM_SECONDS to finish, with no time pressure.
     st.session_state.verified_class_name = token_check.class_name
-    st.session_state.submit_deadline = token_check.expires_at + security.SUBMIT_GRACE_SECONDS
+    st.session_state.verified_session_id = token_check.session_id
+    st.session_state.submit_deadline = time.time() + security.STUDENT_FORM_SECONDS
+
+class_session.sweep_expired()  # lazy cleanup of expired sessions' GPS data
 
 if time.time() > st.session_state.submit_deadline:
     show_message("Mã QR đã hết hạn! Vui lòng xin giảng viên mã mới.")
@@ -465,7 +503,71 @@ st.markdown(f"""
 # It stays at this fixed place on every run, so it is never re-created
 # (re-creating it later is what made the page re-run after a successful send).
 device_cookie_name = device_check.get_cookie_name(class_name)
-device_cookie_loaded, device_cookie_value = device_check.load_browser_cookie(device_cookie_name)
+device_info = device_check.load_device_info(device_cookie_name)
+
+# Browser location. Idle until the student presses "Gửi" (geo_nonce goes up),
+# so the permission prompt only ever appears after they entered name and ID.
+geo_result = geo.locate("student_geo", st.session_state.geo_nonce)
+
+
+def submit_attendance(draft_student_id: str, draft_student_name: str, location, step_placeholder):
+    """Send the check-in. `location` is a GeoResult, or None when skipped."""
+    status = location.status if location else "skipped"
+    latitude = location.latitude if location else None
+    longitude = location.longitude if location else None
+    accuracy = location.accuracy if location else None
+
+    # Silent checks. Nothing is blocked: suspicious entries get a flag in the sheet.
+    fallback_cookie_value = "" if device_info.loaded else device_check.read_header_cookie(device_cookie_name)
+    client_ip = device_check.get_client_ip()
+    duplicate_signals = device_check.collect_duplicate_signals(
+        class_name, draft_student_id, device_info, fallback_cookie_value, client_ip
+    )
+    gps_flags = class_session.preview_gps_flags(class_name, status, latitude, longitude, accuracy)
+    logger.info(
+        "Check-in signals: device_loaded=%s duplicate_candidates=%d gps_status=%s",
+        device_info.loaded, len(duplicate_signals), status,
+    )
+
+    attendance_result = gsheets_api.mark_attendance(
+        class_name, draft_student_id, draft_student_name, duplicate_signals, gps_flags
+    )
+
+    if not attendance_result.success:
+        show_message(attendance_result.message)
+        st.html(RESTORE_SEND_BUTTON_SCRIPT, unsafe_allow_javascript=True)
+        return
+
+    # Keep this student's latest location (replaces the previous one). If the
+    # lecturer set their location in the meantime, fix this student's flags too.
+    current_flags = class_session.record_student_location(
+        class_name, draft_student_id, status, latitude, longitude, accuracy
+    )
+    if current_flags is not None and current_flags != gps_flags:
+        gsheets_api.apply_gps_flags(class_name, {draft_student_id: current_flags})
+
+    device_check.remember_checkin(class_name, draft_student_id, client_ip, device_info.fingerprint)
+    new_cookie_value = device_check.build_device_value(device_info, fallback_cookie_value, draft_student_id)
+    got_location = status == class_session.STATUS_OK
+
+    # Từ đây trang ở trạng thái "done": nếu có rerun bất ngờ, form nhập
+    # không bao giờ quay lại và không thể gửi lần hai.
+    st.session_state.checkin_step = "done"
+    st.session_state.done_student_name = attendance_result.student_name
+    st.session_state.done_cookie_value = new_cookie_value
+    st.session_state.location_received = got_location
+
+    # Thay thế trực tiếp khung xác nhận bằng khung thông báo thành công
+    # Không gọi st.rerun() để giữ nguyên phiên kích hoạt đóng trang của trình duyệt
+    with step_placeholder.container():
+        render_success_card(
+            draft_student_id,
+            attendance_result.student_name,
+            device_cookie_name,
+            new_cookie_value,
+            auto_close=got_location,
+        )
+
 
 step_placeholder = st.empty()
 
@@ -488,6 +590,15 @@ if st.session_state.checkin_step == "input":
             placeholder="Nhập họ và tên"
         )
 
+        if not st.session_state.screen_code_ok:
+            screen_code_input = st.text_input(
+                "Mã xác nhận trên màn hình",
+                max_chars=security.SCREEN_CODE_LENGTH,
+                placeholder=f"{security.SCREEN_CODE_LENGTH} chữ số hiển thị cạnh mã QR",
+            )
+        else:
+            screen_code_input = ""
+
         st.html("""
         <script>
             function bindNumericKeypad() {
@@ -509,6 +620,11 @@ if st.session_state.checkin_step == "input":
                         });
                     }
                 }
+                const codeInput = document.querySelector('input[aria-label="Mã xác nhận trên màn hình"]');
+                if (codeInput) {
+                    codeInput.setAttribute('inputmode', 'numeric');
+                    codeInput.setAttribute('autocomplete', 'off');
+                }
             }
             bindNumericKeypad();
             setTimeout(bindNumericKeypad, 200);
@@ -527,7 +643,15 @@ if st.session_state.checkin_step == "input":
                 and len(clean_student_id) == STUDENT_ID_LENGTH
             ):
                 show_message(f"Mã số sinh viên phải gồm đúng {STUDENT_ID_LENGTH} chữ số.")
+            elif not st.session_state.screen_code_ok and not security.check_screen_code(
+                class_name, st.session_state.verified_session_id, screen_code_input
+            ):
+                show_message(
+                    "Mã xác nhận không đúng hoặc đã đổi. Hãy nhập mã đang hiển thị "
+                    "trên màn hình của giảng viên."
+                )
             else:
+                st.session_state.screen_code_ok = True
                 st.session_state.draft_student_id = clean_student_id
                 st.session_state.draft_student_name = clean_student_name
                 st.session_state.checkin_step = "confirm"
@@ -595,66 +719,36 @@ elif st.session_state.checkin_step == "confirm":
         """, unsafe_allow_javascript=True)
 
     if edit_clicked:
+        st.session_state.locating = False  # cancel a pending location request
         st.session_state.checkin_step = "input"
         st.rerun()
 
     if send_clicked:
-        if not device_cookie_loaded and not st.session_state.device_wait_warned:
+        if not device_info.loaded and not st.session_state.device_wait_warned:
             # The browser has not reported this device's cookie yet (very rare:
             # the student would have to be faster than the page load). Ask for
             # ONE retry instead of silently skipping the duplicate check.
             st.session_state.device_wait_warned = True
             show_message("Đang kiểm tra thiết bị. Vui lòng bấm Gửi lại.")
             st.html(RESTORE_SEND_BUTTON_SCRIPT, unsafe_allow_javascript=True)
-            st.stop()
-
-        # Kiểm tra thiết bị (âm thầm): đánh dấu khi CHÍNH THIẾT BỊ NÀY đã điểm danh
-        # cho một mã sinh viên KHÁC trong CÙNG NGÀY. Sang ngày khác thì không đánh dấu.
-        if device_cookie_loaded:
-            previous_cookie_value = device_cookie_value
         else:
-            previous_cookie_value = device_check.read_header_cookie(device_cookie_name)
-        today_date_code = device_check.get_today_date_code()
-        other_student_ids = device_check.get_other_student_ids_today(
-            previous_cookie_value, today_date_code, draft_student_id
-        )
-        logger.info(
-            "Duplicate check: browser_cookie_loaded=%s, cookie_present=%s, other_students=%d",
-            device_cookie_loaded,
-            bool(previous_cookie_value),
-            len(other_student_ids),
-        )
+            # Step 1 of 2: ask the browser for the location (asked again on EVERY
+            # press of Gửi, so a student who denied by accident can retry).
+            st.session_state.geo_nonce += 1
+            st.session_state.locating = True
+            st.rerun()
 
-        attendance_result = gsheets_api.mark_attendance(
-            class_name,
-            draft_student_id,
-            draft_student_name,
-            other_student_ids
-        )
-
-        if attendance_result.success:
-            new_cookie_value = device_check.build_cookie_value(
-                previous_cookie_value, today_date_code, draft_student_id
-            )
-
-            # Từ đây trang ở trạng thái "done": nếu có rerun bất ngờ, form nhập
-            # không bao giờ quay lại và không thể gửi lần hai.
-            st.session_state.checkin_step = "done"
-            st.session_state.done_student_name = attendance_result.student_name
-            st.session_state.done_cookie_value = new_cookie_value
-
-            # Thay thế trực tiếp khung xác nhận bằng khung thông báo thành công
-            # Không gọi st.rerun() để giữ nguyên phiên kích hoạt đóng trang của trình duyệt
-            with step_placeholder.container():
-                render_success_card(
-                    draft_student_id,
-                    attendance_result.student_name,
-                    device_cookie_name,
-                    new_cookie_value,
-                )
+    elif st.session_state.locating:
+        # Step 2 of 2: the browser answers (or its 15 s timeout fires), then submit.
+        if geo_result is not None:
+            st.session_state.locating = False
+            submit_attendance(draft_student_id, draft_student_name, geo_result, step_placeholder)
         else:
-            show_message(attendance_result.message)
-            st.html(RESTORE_SEND_BUTTON_SCRIPT, unsafe_allow_javascript=True)
+            show_message("Đang xác định vị trí... Hãy chọn Cho phép nếu trình duyệt hỏi.")
+            # Safety net if the location component never answers: never block.
+            if st.button("Gửi không cần vị trí", type="secondary", use_container_width=True):
+                st.session_state.locating = False
+                submit_attendance(draft_student_id, draft_student_name, None, step_placeholder)
 
 # ====================================================
 # BƯỚC 3: ĐÃ ĐIỂM DANH XONG (chỉ hiện lại khi trang bị chạy lại)
@@ -666,4 +760,13 @@ elif st.session_state.checkin_step == "done":
             st.session_state.done_student_name,
             device_cookie_name,
             st.session_state.done_cookie_value,
+            auto_close=st.session_state.location_received,
         )
+
+# Lecturer shortcut: reach the teacher page from the phone that scanned the QR
+# (to set the classroom location). The teacher page asks for the password.
+if st.session_state.checkin_step != "done":
+    st.write("")
+    if st.button("Giảng viên? Mở trang giảng viên", type="secondary", use_container_width=True, key="open_teacher_page"):
+        st.session_state["current_class"] = class_name
+        st.switch_page("views/teacher.py")

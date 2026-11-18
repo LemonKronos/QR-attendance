@@ -7,14 +7,23 @@ Hệ thống cung cấp giải pháp tự động ghi nhận giờ vào lớp c�
 
 ## 🚀 Các Tính Năng Nổi Bật (MVP)
 
-*   **Mã QR có thời hạn:** Mã QR chỉ mở được trang điểm danh trong 10 phút kể từ lúc tạo (giảng viên bấm **Làm mới mã QR** để tạo mã mới bất cứ lúc nào). Mã được ký bằng khóa bí mật nên không thể sửa hay làm giả.
+*   **Mã QR xoay vòng:** Mã QR đổi liên tục mỗi 10 giây (server chấp nhận mã hiện tại và mã liền trước, tức 10-20 giây để quét). Ảnh chụp/đường dẫn gửi sau đó sẽ không dùng được. Chỉ cần quét kịp lúc **mở trang**; sau đó sinh viên có tối đa 10 phút để nhập thông tin, không bị áp lực thời gian. Một phiên điểm danh kéo dài 10 phút kể từ lúc tạo mã (bấm **Làm mới mã QR** để bắt đầu lại 10 phút).
+*   **Mã xác nhận trên màn hình:** Cạnh mã QR có một mã 4 chữ số đổi mỗi 45 giây. Sinh viên phải nhập mã này sau khi quét (chỉ nhập một lần).
 *   **Điểm Danh Một Chạm:** Sinh viên chỉ cần dùng điện thoại (cùng mạng Wi-Fi với giảng viên) quét mã QR, nhập Mã Sinh Viên và Họ Tên để điểm danh.
 *   **Lưu Trữ Đám Mây:** Dữ liệu điểm danh được đẩy tự động lên Google Sheets của giảng viên, mỗi ngày một cột.
 *   **Đường dẫn được bảo vệ:**
     *   Trang sinh viên nằm ở một đường dẫn ngẫu nhiên, không đoán được (`/checkin-xxxxxxxxxxxxxxxx`), chỉ xuất hiện trong mã QR.
     *   Trang giảng viên ở `/teacher`, có mật khẩu, chặn thử mật khẩu liên tục, và **không có liên kết nào dẫn tới** từ các trang khác.
 *   **Kiểm tra họ tên thông minh:** Mã sinh viên phải khớp tuyệt đối. Nếu mã đã có trong Google Sheets, họ tên nhập vào được so sánh không phân biệt hoa/thường và dấu: sai nhẹ (gõ sai chữ, thiếu dấu) sẽ được **tự sửa theo tên trong sheet** và chấp nhận; khác hẳn thì bị từ chối.
-*   **Chống Gian Lận Âm Thầm (Anti-Cheat):** Hệ thống dùng Cookie để nhận diện thiết bị. Nếu **trong cùng một ngày** một thiết bị điểm danh cho một mã sinh viên **khác**, hệ thống vẫn ghi nhận nhưng gắn cờ `FLAG: Duplicate Device` trên Google Sheets (cả hai bên: dòng mới ghi "previously by ID - Tên", dòng cũ được nối thêm "also registered for ID - Tên"). **Sinh viên không hề thấy thông báo nào về việc bị gắn cờ.** Sang ngày khác thì không gắn cờ.
+*   **Chống Gian Lận Âm Thầm (Anti-Cheat):** Hệ thống **không bao giờ chặn** sinh viên, chỉ ghi nhận và gắn cờ kèm lý do rõ ràng ngay trong ô của Google Sheet (nhiều cờ ngăn cách bằng xuống dòng) để giảng viên kiểm tra thủ công. **Sinh viên không thấy thông báo gắn cờ.**
+    *   `Duplicate Device`: một thiết bị điểm danh cho mã sinh viên **khác** trong cùng ngày. Kết hợp nhiều tín hiệu: cookie, localStorage, và (cho chế độ ẩn danh) **cùng địa chỉ IP + cùng "chữ ký" thiết bị**. IP đứng một mình không bị coi là dấu hiệu, vì cả lớp dùng chung IP Wi-Fi trường.
+    *   `OUT_OF_RANGE` / `GPS_DENIED` / `GPS_LOW_ACCURACY`: so vị trí sinh viên với vị trí giảng viên (bán kính 500 m, đã trừ sai số GPS của hai thiết bị). Chỉ hoạt động sau khi giảng viên đặt vị trí; trước đó không ai bị gắn cờ GPS.
+
+### Cách đặt vị trí giảng viên (GPS)
+1. Giảng viên đăng nhập trang giảng viên trên máy tính, tạo mã QR.
+2. Dùng điện thoại quét mã QR, vào trang sinh viên, kéo xuống bấm **Giảng viên? Mở trang giảng viên**, đăng nhập bằng mật khẩu.
+3. Bấm **Đặt vị trí thiết bị này làm vị trí lớp học** và cho phép vị trí. (Nút này cũng có trên máy tính, nhưng GPS máy tính kém; vị trí kém chính xác hơn sẽ không ghi đè vị trí tốt hơn trừ khi giảng viên xác nhận.)
+4. Sinh viên được hỏi quyền vị trí mỗi lần bấm **Gửi**. Dữ liệu vị trí chỉ nằm trong bộ nhớ máy chủ và **bị xóa khi phiên hết hạn hoặc giảng viên bấm Tắt mã QR** (không bị xóa khi bấm Làm mới). Việc xóa chạy khi có trang được tải hoặc màn hình QR của giảng viên đang mở, vì Streamlit không có bộ đếm thời gian nền. Các cờ đã ghi trong Google Sheet vẫn được giữ.
 
 ---
 

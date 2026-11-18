@@ -13,11 +13,21 @@ import streamlit as st
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SECRET_KEY_PATH = PROJECT_ROOT / "secret.key"
 
-# A QR code can only be used to OPEN the check-in page for this long.
+# One attendance session (from creating the QR until it stops) lasts this long.
+# "Renew" restarts this clock.
 QR_VALIDITY_SECONDS = 600
-# A student who opened the page just before the QR expired still gets this much
-# extra time to type their details and press the send button.
-SUBMIT_GRACE_SECONDS = 300
+# The QR on the projector changes every QR_ROTATION_SECONDS. The server accepts
+# the current slot and the previous one, so a scan stays valid for 10-20 s.
+# The window only applies to OPENING the page; afterwards the student may take
+# STUDENT_FORM_SECONDS to type their details (no time pressure).
+QR_ROTATION_SECONDS = 10
+QR_ACCEPTED_PREVIOUS_SLOTS = 1
+STUDENT_FORM_SECONDS = 600
+
+# The 4-digit code shown next to the QR on the teacher screen.
+SCREEN_CODE_PERIOD_SECONDS = 45
+SCREEN_CODE_ACCEPTED_PREVIOUS = 1
+SCREEN_CODE_LENGTH = 4
 
 SIGNATURE_BYTE_LENGTH = 16
 
@@ -94,66 +104,89 @@ def _sign(message: str) -> str:
 class TokenCheckResult:
     is_valid: bool
     class_name: str
-    expires_at: float
+    session_id: str
+    session_expires_at: float
     message: str
 
 
-def generate_qr_token(class_name: str) -> str:
-    expires_at = int(time.time()) + QR_VALIDITY_SECONDS
-    # A random nonce ensures two QR generations in the same second still
-    # produce different links, even for the same class.
-    nonce = secrets.token_urlsafe(8)
-    payload = f"{expires_at}|{nonce}|{class_name}"
+def current_qr_slot(now: float = None) -> int:
+    """Index of the current QR_ROTATION_SECONDS-long time slot."""
+    return int((time.time() if now is None else now) // QR_ROTATION_SECONDS)
+
+
+def generate_qr_token(class_name: str, session_id: str, session_expires_at: float) -> str:
+    """Token for the CURRENT time slot. The teacher page calls this every slot."""
+    payload = f"{int(session_expires_at)}|{current_qr_slot()}|{session_id}|{class_name}"
     encoded_payload = _encode_base64_url(payload.encode("utf-8"))
     return f"{encoded_payload}.{_sign(encoded_payload)}"
 
 
 def validate_token(token: str) -> TokenCheckResult:
-    broken_token_result = TokenCheckResult(
-        is_valid=False,
-        class_name="",
-        expires_at=0.0,
-        message="Mã QR không hợp lệ hoặc đã bị hỏng.",
-    )
+    def failure(message, class_name="", session_id="", expires_at=0.0):
+        return TokenCheckResult(False, class_name, session_id, expires_at, message)
 
+    broken_message = "Mã QR không hợp lệ hoặc đã bị hỏng."
     try:
         encoded_payload, received_signature = token.split(".")
         expected_signature = _sign(encoded_payload)
-        signature_matches = hmac.compare_digest(
-            received_signature.encode("utf-8"),
-            expected_signature.encode("utf-8"),
-        )
-        if not signature_matches:
-            return broken_token_result
+        if not hmac.compare_digest(
+            received_signature.encode("utf-8"), expected_signature.encode("utf-8")
+        ):
+            return failure(broken_message)
 
         payload = _decode_base64_url(encoded_payload).decode("utf-8")
-        payload_parts = payload.split("|", 2)
-        if len(payload_parts) == 3:
-            # Current format: expiry | random nonce | class name.
-            expires_at_text, _nonce, class_name = payload_parts
-        elif len(payload_parts) == 2:
-            # Accept tokens from the previous format during a short transition.
-            expires_at_text, class_name = payload_parts
-        else:
-            return broken_token_result
+        payload_parts = payload.split("|", 3)
+        if len(payload_parts) != 4:
+            return failure(broken_message)
+        expires_at_text, slot_text, session_id, class_name = payload_parts
         expires_at = float(expires_at_text)
+        token_slot = int(slot_text)
     except (ValueError, UnicodeError):
-        return broken_token_result
+        return failure(broken_message)
 
     if time.time() > expires_at:
-        return TokenCheckResult(
-            is_valid=False,
-            class_name=class_name,
-            expires_at=expires_at,
-            message="Mã QR đã hết hạn! Vui lòng xin giảng viên mã mới.",
+        return failure(
+            "Mã QR đã hết hạn! Vui lòng xin giảng viên mã mới.",
+            class_name, session_id, expires_at,
         )
 
-    return TokenCheckResult(
-        is_valid=True,
-        class_name=class_name,
-        expires_at=expires_at,
-        message="Hợp lệ",
-    )
+    slots_old = current_qr_slot() - token_slot
+    if slots_old < 0 or slots_old > QR_ACCEPTED_PREVIOUS_SLOTS:
+        return failure(
+            "Mã QR này đã được thay đổi. Hãy quét lại mã QR đang hiển thị trên màn hình.",
+            class_name, session_id, expires_at,
+        )
+
+    return TokenCheckResult(True, class_name, session_id, expires_at, "Hợp lệ")
+
+
+# ---------------------------------------------------------------------------
+# On-screen code (second secret, typed by the student after scanning)
+# ---------------------------------------------------------------------------
+
+def _screen_code_for_slot(class_name: str, session_id: str, slot: int) -> str:
+    message = f"screen-code|{class_name}|{session_id}|{slot}".encode("utf-8")
+    digest = hmac.new(SECRET_KEY, message, hashlib.sha256).digest()
+    number = int.from_bytes(digest[:4], "big") % (10 ** SCREEN_CODE_LENGTH)
+    return str(number).zfill(SCREEN_CODE_LENGTH)
+
+
+def get_screen_code(class_name: str, session_id: str):
+    """Return (current code, seconds until it changes) for the teacher screen."""
+    now = time.time()
+    slot = int(now // SCREEN_CODE_PERIOD_SECONDS)
+    seconds_left = int((slot + 1) * SCREEN_CODE_PERIOD_SECONDS - now) + 1
+    return _screen_code_for_slot(class_name, session_id, slot), seconds_left
+
+
+def check_screen_code(class_name: str, session_id: str, entered_code: str) -> bool:
+    entered_code = entered_code.strip()
+    current_slot = int(time.time() // SCREEN_CODE_PERIOD_SECONDS)
+    for slots_back in range(SCREEN_CODE_ACCEPTED_PREVIOUS + 1):
+        expected = _screen_code_for_slot(class_name, session_id, current_slot - slots_back)
+        if hmac.compare_digest(entered_code.encode("utf-8"), expected.encode("utf-8")):
+            return True
+    return False
 
 
 def get_student_page_path() -> str:

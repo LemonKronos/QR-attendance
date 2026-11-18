@@ -1,5 +1,6 @@
 import difflib
 import logging
+import re
 import threading
 import time
 import os
@@ -283,6 +284,10 @@ def _describe(student_id: str, student_name: str) -> str:
     return f"{student_id} - {student_name}" if student_name else student_id
 
 
+def _without_reasons(text: str) -> str:
+    return re.sub(r"\s*\([^()]*\)", "", text)
+
+
 def _merge_flag(existing_mark: str, note: str) -> str:
     """Turn a cell into a duplicate flag, or add one more note to an existing flag.
 
@@ -291,14 +296,45 @@ def _merge_flag(existing_mark: str, note: str) -> str:
     """
     existing_mark = existing_mark.strip()
     if existing_mark.startswith(DUPLICATE_DEVICE_MARK):
-        if note in existing_mark:
+        # Compare without the "(reasons)" part, so re-sending from the same
+        # device never adds the same note again just because the reasons differ.
+        if _without_reasons(note) in _without_reasons(existing_mark):
             return existing_mark
         return f"{existing_mark}; {note}"
     return f"{DUPLICATE_DEVICE_MARK}: {note}"
 
 
+# GPS flags are kept on their own lines of the cell (after the duplicate-device
+# line, if any) so they can be replaced without touching the permanent flags.
+GPS_FLAG_PREFIXES = ("OUT_OF_RANGE", "GPS_DENIED", "GPS_LOW_ACCURACY")
+
+
+def _split_mark(mark: str):
+    """Split a cell into (permanent text, [GPS flag lines])."""
+    permanent_lines, gps_lines = [], []
+    for line in mark.replace("\r", "").split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        (gps_lines if line.startswith(GPS_FLAG_PREFIXES) else permanent_lines).append(line)
+    return " ".join(permanent_lines), gps_lines
+
+
+def _join_mark(permanent_text: str, gps_lines: list) -> str:
+    """Build the cell: flags replace the plain \"X\", several flags are joined by a newline."""
+    lines = []
+    if permanent_text and not (permanent_text == PRESENT_MARK and gps_lines):
+        lines.append(permanent_text)
+    lines.extend(gps_lines)
+    return "\n".join(lines) if lines else PRESENT_MARK
+
+
+def _with_reasons(text: str, reasons: list) -> str:
+    return f"{text} ({', '.join(reasons)})" if reasons else text
+
+
 def _mark_attendance_while_locked(
-    class_name: str, student_id: str, student_name: str, other_student_ids: list
+    class_name: str, student_id: str, student_name: str, duplicate_signals: dict, gps_flags
 ) -> AttendanceResult:
     worksheet = _get_worksheet(class_name)
     all_rows = _call_with_retry(worksheet.get_all_values)
@@ -348,64 +384,136 @@ def _mark_attendance_while_locked(
             official_name = student_name
             _write_cell(worksheet, student_row_number, 2, official_name)
 
-    # ---- who else used this device today? (A, when this entry is B)
+    # ---- who else looks like this device today? (A, when this entry is B)
     other_students = []
-    for other_id in other_student_ids:
+    for other_id, reasons in duplicate_signals.items():
         other_row_number, other_row_values = _find_student_row(all_rows, other_id)
         other_name = other_row_values[1].strip() if len(other_row_values) > 1 else ""
-        other_students.append((other_id, other_name, other_row_number, other_row_values))
+        other_students.append((other_id, other_name, reasons, other_row_number, other_row_values))
 
-    # ---- this student's own cell:  "Duplicate Device: previously by A-id - A-name"
+    # ---- this student's own cell:  "Duplicate Device: previously by A-id - A-name (cookie, ...)"
     own_note = ""
     if other_students:
-        previous_text = ", ".join(_describe(i, n) for i, n, _r, _v in other_students)
+        previous_text = ", ".join(
+            _with_reasons(_describe(i, n), reasons) for i, n, reasons, _r, _v in other_students
+        )
         own_note = f"previously by {previous_text}"
 
     if student_row_number is None:
-        mark = _merge_flag("", own_note) if own_note else PRESENT_MARK
+        permanent_text = _merge_flag("", own_note) if own_note else PRESENT_MARK
+        mark = _join_mark(permanent_text, list(gps_flags or []))
         blank_cells_before_today = [""] * (today_column_number - 3)
         new_row = [student_id, official_name] + blank_cells_before_today + [mark]
         _call_with_retry(lambda: worksheet.append_row(new_row, value_input_option="RAW"))
     else:
         existing_mark = _get_cell_text(student_row_values, today_column_number)
+        existing_permanent, existing_gps = _split_mark(existing_mark)
         if own_note:
-            new_mark = _merge_flag(existing_mark, own_note)
+            new_permanent = _merge_flag(existing_permanent, own_note)
         else:
-            # A re-submit can never erase an existing mark.
-            new_mark = existing_mark or PRESENT_MARK
+            # A re-submit can never erase an existing flag.
+            new_permanent = existing_permanent or PRESENT_MARK
+        # GPS flags are always recomputed by the caller: replace the old ones.
+        new_gps = existing_gps if gps_flags is None else list(gps_flags)
+        new_mark = _join_mark(new_permanent, new_gps)
         if new_mark != existing_mark:
             _write_cell(worksheet, student_row_number, today_column_number, new_mark)
 
-    # ---- the earlier students' cells (A): "... also registered for B-id - B-name"
+    # ---- the earlier students' cells (A): "... also registered for B-id - B-name (cookie, ...)"
     new_student_text = _describe(student_id, official_name)
-    for _other_id, _other_name, other_row_number, other_row_values in other_students:
+    for _other_id, _other_name, reasons, other_row_number, other_row_values in other_students:
         if other_row_number is None:
             continue
         other_existing_mark = _get_cell_text(other_row_values, today_column_number)
-        other_new_mark = _merge_flag(other_existing_mark, f"also registered for {new_student_text}")
+        other_permanent, other_gps = _split_mark(other_existing_mark)
+        other_new_permanent = _merge_flag(
+            other_permanent, f"also registered for {_with_reasons(new_student_text, reasons)}"
+        )
+        other_new_mark = _join_mark(other_new_permanent, other_gps)
         if other_new_mark != other_existing_mark:
             _write_cell(worksheet, other_row_number, today_column_number, other_new_mark)
 
     return AttendanceResult(True, "Thành công", official_name)
 
 
-def mark_attendance(
-    class_name: str, student_id: str, student_name: str, other_student_ids: list = ()
-) -> AttendanceResult:
+def _run_sheet_operation(description: str, operation) -> AttendanceResult:
+    """Run an operation under the sheet lock and turn failures into a result."""
     try:
         with _sheet_lock:
-            return _mark_attendance_while_locked(
-                class_name, student_id, student_name, list(other_student_ids)
-            )
+            return operation()
     except UserFacingError as error:
         return AttendanceResult(False, str(error))
     except gspread.exceptions.APIError as error:
-        logger.exception("Google Sheets API error while marking attendance")
+        logger.exception("Google Sheets API error while %s", description)
         _reset_cache()
         if _get_http_status_code(error) == RATE_LIMIT_HTTP_STATUS_CODE:
             return AttendanceResult(False, SYSTEM_BUSY_MESSAGE)
         return AttendanceResult(False, CONNECTION_ERROR_MESSAGE)
     except Exception:
-        logger.exception("Unexpected error while marking attendance")
+        logger.exception("Unexpected error while %s", description)
         _reset_cache()
         return AttendanceResult(False, CONNECTION_ERROR_MESSAGE)
+
+
+def mark_attendance(
+    class_name: str,
+    student_id: str,
+    student_name: str,
+    duplicate_signals: dict = None,
+    gps_flags: list = None,
+) -> AttendanceResult:
+    """Record attendance.
+
+    duplicate_signals: {other_student_id: [reasons]} from device_check.
+    gps_flags: the student's GPS flag lines (replaces any older GPS flags);
+               None leaves the cell's GPS flags untouched.
+    """
+    return _run_sheet_operation(
+        "marking attendance",
+        lambda: _mark_attendance_while_locked(
+            class_name, student_id, student_name, dict(duplicate_signals or {}), gps_flags
+        ),
+    )
+
+
+def _apply_gps_flags_while_locked(class_name: str, flags_by_student: dict) -> AttendanceResult:
+    worksheet = _get_worksheet(class_name)
+    all_rows = _call_with_retry(worksheet.get_all_values)
+    header_row = list(all_rows[0]) if all_rows else []
+    today_label = clock.now().strftime("%d-%b-%Y")
+    if today_label not in header_row:
+        return AttendanceResult(True, "0")
+    today_column_number = header_row.index(today_label) + 1
+
+    cell_updates = []
+    for student_id, gps_lines in flags_by_student.items():
+        row_number, row_values = _find_student_row(all_rows, student_id)
+        if row_number is None:
+            continue
+        existing_mark = _get_cell_text(row_values, today_column_number)
+        if not existing_mark:
+            continue  # not marked present today: nothing to flag
+        permanent_text, _old_gps = _split_mark(existing_mark)
+        new_mark = _join_mark(permanent_text, list(gps_lines))
+        if new_mark != existing_mark:
+            cell_updates.append(
+                {
+                    "range": gspread.utils.rowcol_to_a1(row_number, today_column_number),
+                    "values": [[new_mark]],
+                }
+            )
+
+    if cell_updates:
+        # One request for all changed cells keeps us far from the API rate limit.
+        _call_with_retry(lambda: worksheet.batch_update(cell_updates, raw=True))
+    return AttendanceResult(True, str(len(cell_updates)))
+
+
+def apply_gps_flags(class_name: str, flags_by_student: dict) -> AttendanceResult:
+    """Replace the GPS flag lines of many students' cells for today (one read, one write)."""
+    if not flags_by_student:
+        return AttendanceResult(True, "0")
+    return _run_sheet_operation(
+        "updating GPS flags",
+        lambda: _apply_gps_flags_while_locked(class_name, dict(flags_by_student)),
+    )

@@ -2,7 +2,8 @@
 <html>
 <body>
 <script>
-// Tiny Streamlit component: reads ONE cookie from the browser and reports it
+// Tiny Streamlit component: reads ONE cookie + the same-named localStorage item
+// and a device signature from the browser and reports them
 // to Python exactly once. It never writes anything and never reports again,
 // so it cannot cause repeated reruns of the student page.
 function send(type, data) {
@@ -24,6 +25,37 @@ function readCookie(name) {
     return "";
 }
 
+function readStorage(name) {
+    try {
+        return window.localStorage.getItem(name) || "";
+    } catch (error) {
+        return "";  // storage blocked (some private modes)
+    }
+}
+
+// Small non-unique "device signature": a hash of ordinary browser properties.
+// It is only ever compared together with the IP address, never used alone.
+function makeFingerprint() {
+    let timeZone = "";
+    try { timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (error) {}
+    const parts = [
+        navigator.userAgent, navigator.platform, navigator.language,
+        (navigator.languages || []).join(","),
+        screen.width + "x" + screen.height, screen.colorDepth, window.devicePixelRatio,
+        timeZone, navigator.hardwareConcurrency, navigator.deviceMemory, navigator.maxTouchPoints,
+    ].join("|");
+    // cyrb53 hash
+    let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+    for (let i = 0; i < parts.length; i++) {
+        const code = parts.charCodeAt(i);
+        h1 = Math.imul(h1 ^ code, 2654435761);
+        h2 = Math.imul(h2 ^ code, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);
+}
+
 let alreadyReported = false;
 
 window.addEventListener("message", function (event) {
@@ -33,7 +65,12 @@ window.addEventListener("message", function (event) {
     const args = event.data.args || {};
     send("streamlit:setFrameHeight", { height: 0 });
     send("streamlit:setComponentValue", {
-        value: { loaded: true, value: readCookie(args.cookie_name || "") },
+        value: {
+            loaded: true,
+            value: readCookie(args.cookie_name || ""),
+            storage_value: readStorage(args.cookie_name || ""),
+            fingerprint: makeFingerprint(),
+        },
         dataType: "json",
     });
 });

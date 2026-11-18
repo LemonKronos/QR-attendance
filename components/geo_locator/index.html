@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<body>
+<script>
+// Tiny Streamlit component: asks the browser for its location ONLY when the
+// "nonce" argument changes to a new positive number (the user pressed a
+// button), then reports one result back. It is idle on page load, so it never
+// shows a permission prompt by itself and never causes extra reruns.
+//
+// Result: {nonce, status: "ok"|"denied"|"timeout"|"unavailable"|"unsupported",
+//          lat, lon, accuracy}
+// The overall timeout also covers a prompt the person simply ignores/dismisses.
+function send(type, data) {
+    window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data), "*");
+}
+
+let lastNonce = 0;
+
+function locate(nonce, timeoutMs) {
+    let finished = false;
+    let timer = null;
+
+    function finish(result) {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        result.nonce = nonce;
+        send("streamlit:setComponentValue", { value: result, dataType: "json" });
+    }
+
+    timer = setTimeout(function () { finish({ status: "timeout" }); }, timeoutMs);
+
+    if (!navigator.geolocation) {
+        finish({ status: "unsupported" });
+        return;
+    }
+    navigator.geolocation.getCurrentPosition(
+        function (position) {
+            finish({
+                status: "ok",
+                lat: position.coords.latitude,
+                lon: position.coords.longitude,
+                accuracy: position.coords.accuracy,
+            });
+        },
+        function (error) {
+            // 1 = permission denied, 2 = position unavailable, 3 = timeout
+            finish({ status: error.code === 1 ? "denied" : (error.code === 3 ? "timeout" : "unavailable") });
+        },
+        { enableHighAccuracy: true, timeout: Math.max(1000, timeoutMs - 2000), maximumAge: 0 }
+    );
+}
+
+window.addEventListener("message", function (event) {
+    if (!event.data || event.data.type !== "streamlit:render") return;
+    send("streamlit:setFrameHeight", { height: 0 });
+    const args = event.data.args || {};
+    const nonce = Number(args.nonce || 0);
+    if (nonce <= 0 || nonce === lastNonce) return;
+    lastNonce = nonce;
+    locate(nonce, Number(args.timeout_ms || 15000));
+});
+
+send("streamlit:componentReady", { apiVersion: 1 });
+send("streamlit:setFrameHeight", { height: 0 });
+</script>
+</body>
+</html>
