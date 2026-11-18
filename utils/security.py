@@ -20,12 +20,12 @@ QR_VALIDITY_SECONDS = 600
 # the current slot and the previous one, so a scan stays valid for 10-20 s.
 # The window only applies to OPENING the page; afterwards the student may take
 # STUDENT_FORM_SECONDS to type their details (no time pressure).
-QR_ROTATION_SECONDS = 10
+QR_ROTATION_SECONDS = 30
 QR_ACCEPTED_PREVIOUS_SLOTS = 1
 STUDENT_FORM_SECONDS = 600
 
 # The 4-digit code shown next to the QR on the teacher screen.
-SCREEN_CODE_PERIOD_SECONDS = 45
+SCREEN_CODE_PERIOD_SECONDS = 13
 SCREEN_CODE_ACCEPTED_PREVIOUS = 1
 SCREEN_CODE_LENGTH = 4
 

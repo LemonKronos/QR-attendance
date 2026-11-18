@@ -117,7 +117,7 @@ def render_live_qr():
         </div>
         <div class="url-outline-box">
             <span style="color: #030391; font-weight: 700; font-size: 0.92rem;">
-                Đường dẫn kiểm thử của mã QR hiện tại (đổi mỗi {security.QR_ROTATION_SECONDS} giây):
+                Đường dẫn của mã QR hiện tại:
             </span><br/>
             <a href="{html.escape(st.session_state.qr_url, quote=True)}" target="_blank" rel="noopener noreferrer"
                style="color: #1488DB; font-weight: 600; text-decoration: none; font-size: 0.92rem;">
@@ -274,7 +274,7 @@ def apply_new_teacher_location_message(class_name: str, accuracy: float) -> str:
     with st.spinner("Đang cập nhật cờ GPS cho sinh viên..."):
         update_result = class_session.recompute_all_gps_flags(class_name)
     if update_result.success:
-        return f"Đã đặt vị trí lớp học (±{accuracy:.0f} m) và cập nhật cờ GPS."
+        return f"Đã đặt vị trí GPS lớp học (±{accuracy:.0f} m)"
     return (
         f"Đã đặt vị trí lớp học (±{accuracy:.0f} m) nhưng chưa cập nhật được Google Sheet: "
         f"{update_result.message}"
@@ -295,27 +295,20 @@ def render_location_panel(typed_class_name: str) -> None:
         handle_teacher_location_result(class_name, geo_result)
 
     status = class_session.get_teacher_status(class_name) if class_name else {"session_open": False}
+    session_open = status.get("session_open", False)
 
-    if status.get("session_open") and status.get("has_location"):
-        show_notice(
-            f"Đã đặt vị trí lớp học (±{status['accuracy']:.0f} m). "
-            f"Sinh viên đã gửi vị trí: {status['students_with_location']}/{status['students_total']}."
-        )
-    elif status.get("session_open"):
-        show_notice("Chưa đặt vị trí lớp học. Khi chưa đặt, không ai bị gắn cờ GPS.")
-    else:
-        st.caption(
-            "Tạo mã QR trước, rồi bấm nút bên dưới trên điện thoại (GPS điện thoại chính xác hơn "
-            "máy tính). Nút này dùng được trên cả máy tính lẫn điện thoại."
-        )
+    # ---- caption: always visible
+    st.caption(
+        "Tạo mã QR trước, rồi bấm nút bên dưới trên điện thoại (GPS điện thoại chính xác hơn "
+        "máy tính). Nút này dùng được trên cả máy tính lẫn điện thoại."
+    )
 
+    # ---- button: always rendered
     if st.button("Đặt vị trí thiết bị này làm vị trí lớp học", key="set_teacher_location", use_container_width=True):
         if not class_name:
             st.session_state.location_message = "Vui lòng nhập tên lớp."
-        elif not status.get("session_open"):
-            st.session_state.location_message = (
-                "Lớp này chưa có phiên điểm danh đang chạy. Hãy tạo mã QR trước."
-            )
+        elif not session_open:
+            st.session_state.location_message = "Lớp này chưa có phiên điểm danh đang chạy. Hãy tạo mã QR trước."
         else:
             st.session_state.geo_nonce += 1
             st.session_state.geo_wait_nonce = st.session_state.geo_nonce
@@ -323,11 +316,9 @@ def render_location_panel(typed_class_name: str) -> None:
             st.session_state.pending_location = None
             st.rerun()
 
-    if waiting:
-        show_notice("Đang xác định vị trí... Hãy chọn Cho phép nếu trình duyệt hỏi.")
-
+    # ---- extra button, only after a worse fix was kept out
     pending = st.session_state.pending_location
-    if pending and pending[0] == class_name:
+    if pending and pending[0] == class_name and session_open:
         if st.button("Vẫn dùng vị trí kém chính xác hơn này", type="secondary", use_container_width=True):
             _, latitude, longitude, accuracy = pending
             class_session.set_teacher_location(class_name, latitude, longitude, accuracy, force=True)
@@ -335,8 +326,15 @@ def render_location_panel(typed_class_name: str) -> None:
             st.session_state.location_message = apply_new_teacher_location_message(class_name, accuracy)
             st.rerun()
 
-    if st.session_state.location_message:
+    # ---- exactly ONE notice div
+    if waiting:
+        show_notice("Đang xác định vị trí... Hãy chọn Cho phép nếu trình duyệt hỏi.")
+    elif st.session_state.location_message:
         show_notice(st.session_state.location_message)
+    elif session_open and status.get("has_location"):
+        show_notice(f"Đã đặt vị trí lớp học (±{status['accuracy']:.0f} m).")
+    elif session_open:
+        show_notice("Chưa đặt vị trí lớp học.")
 
 
 st.markdown("""
@@ -677,11 +675,10 @@ else:
     escaped_sheet_url = html.escape(gsheets_api.SHEET_URL, quote=True)
     st.markdown(f"""
     <div class="url-outline-box" style="margin: 0 0 16px 0;">
-        <span style="color: #030391; font-weight: 700; font-size: 0.92rem;">
-            Google Sheet điểm danh:
-        </span><br/>
         <a href="{escaped_sheet_url}" target="_blank" rel="noopener noreferrer" style="color: #1488DB; font-weight: 600; text-decoration: none; font-size: 0.92rem;">
-            {escaped_sheet_url}
+            <span style="color: #030391; font-weight: 700; font-size: 0.92rem;">
+                Link Google Sheet điểm danh
+            </span>
         </a>
     </div>
     """, unsafe_allow_html=True)

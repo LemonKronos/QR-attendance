@@ -1,153 +1,142 @@
 # Hệ Thống Điểm Danh Lớp Học bằng Mã QR (Phiên bản MVP)
 
-Dự án này là phiên bản Minimum Viable Product (MVP) được phát triển nhằm đáp ứng yêu cầu của bài tập nhóm môn học **Quản lý dự án (Project Management)**.
-Hệ thống cung cấp giải pháp tự động ghi nhận giờ vào lớp của sinh viên thông qua ứng dụng di động, kết hợp xử lý dữ liệu tự động trên Google Sheets thông qua API, giúp giảng viên quản lý chuyên cần một cách chính xác và minh bạch.
+Dự án MVP cho bài tập môn **Quản lý dự án (Project Management)**. Giảng viên trình chiếu một mã QR; sinh viên quét bằng điện thoại, nhập Mã SV + Họ tên; kết quả được ghi tự động vào Google Sheets (mỗi lớp một tab, mỗi ngày một cột). Hệ thống chạy được trên Streamlit Community Cloud (miễn phí), không cần mạng nội bộ hay phần cứng riêng.
 
 ---
 
-## 🚀 Các Tính Năng Nổi Bật (MVP)
+## 🚀 Tính Năng
 
-*   **Mã QR xoay vòng:** Mã QR đổi liên tục mỗi 10 giây (server chấp nhận mã hiện tại và mã liền trước, tức 10-20 giây để quét). Ảnh chụp/đường dẫn gửi sau đó sẽ không dùng được. Chỉ cần quét kịp lúc **mở trang**; sau đó sinh viên có tối đa 10 phút để nhập thông tin, không bị áp lực thời gian. Một phiên điểm danh kéo dài 10 phút kể từ lúc tạo mã (bấm **Làm mới mã QR** để bắt đầu lại 10 phút).
-*   **Mã xác nhận trên màn hình:** Cạnh mã QR có một mã 4 chữ số đổi mỗi 45 giây. Sinh viên phải nhập mã này sau khi quét (chỉ nhập một lần).
-*   **Điểm Danh Một Chạm:** Sinh viên chỉ cần dùng điện thoại (cùng mạng Wi-Fi với giảng viên) quét mã QR, nhập Mã Sinh Viên và Họ Tên để điểm danh.
-*   **Lưu Trữ Đám Mây:** Dữ liệu điểm danh được đẩy tự động lên Google Sheets của giảng viên, mỗi ngày một cột.
-*   **Đường dẫn được bảo vệ:**
-    *   Trang sinh viên nằm ở một đường dẫn ngẫu nhiên, không đoán được (`/checkin-xxxxxxxxxxxxxxxx`), chỉ xuất hiện trong mã QR.
-    *   Trang giảng viên ở `/teacher`, có mật khẩu, chặn thử mật khẩu liên tục, và **không có liên kết nào dẫn tới** từ các trang khác.
-*   **Kiểm tra họ tên thông minh:** Mã sinh viên phải khớp tuyệt đối. Nếu mã đã có trong Google Sheets, họ tên nhập vào được so sánh không phân biệt hoa/thường và dấu: sai nhẹ (gõ sai chữ, thiếu dấu) sẽ được **tự sửa theo tên trong sheet** và chấp nhận; khác hẳn thì bị từ chối.
-*   **Chống Gian Lận Âm Thầm (Anti-Cheat):** Hệ thống **không bao giờ chặn** sinh viên, chỉ ghi nhận và gắn cờ kèm lý do rõ ràng ngay trong ô của Google Sheet (nhiều cờ ngăn cách bằng xuống dòng) để giảng viên kiểm tra thủ công. **Sinh viên không thấy thông báo gắn cờ.**
-    *   `Duplicate Device`: một thiết bị điểm danh cho mã sinh viên **khác** trong cùng ngày. Kết hợp nhiều tín hiệu: cookie, localStorage, và (cho chế độ ẩn danh) **cùng địa chỉ IP + cùng "chữ ký" thiết bị**. IP đứng một mình không bị coi là dấu hiệu, vì cả lớp dùng chung IP Wi-Fi trường.
-    *   `OUT_OF_RANGE` / `GPS_DENIED` / `GPS_LOW_ACCURACY`: so vị trí sinh viên với vị trí giảng viên (bán kính 500 m, đã trừ sai số GPS của hai thiết bị). Chỉ hoạt động sau khi giảng viên đặt vị trí; trước đó không ai bị gắn cờ GPS.
+### Điểm danh
+*   **Điểm danh một chạm:** quét QR, nhập Mã SV (7 chữ số) và Họ tên, bấm **Tiếp tục**, kiểm tra lại rồi **Gửi**.
+*   **Lưu trữ đám mây:** ghi thẳng vào Google Sheets; sinh viên chưa có trong danh sách sẽ được tự thêm vào cuối.
+*   **Kiểm tra họ tên thông minh:** Mã SV phải khớp tuyệt đối. Nếu mã đã có trong sheet, họ tên được so sánh không phân biệt hoa/thường và dấu: sai nhẹ sẽ **tự sửa theo tên trong sheet**, khác hẳn thì bị từ chối.
+*   **Đường dẫn được bảo vệ:** trang sinh viên nằm ở đường dẫn ngẫu nhiên (`/checkin-xxxxxxxxxxxxxxxx`) và chỉ mở được qua mã QR hợp lệ. Trang giảng viên ở `/teacher`, có mật khẩu và chặn thử mật khẩu liên tục.
 
-### Cách đặt vị trí giảng viên (GPS)
-1. Giảng viên đăng nhập trang giảng viên trên máy tính, tạo mã QR.
-2. Dùng điện thoại quét mã QR, vào trang sinh viên, kéo xuống bấm **Giảng viên? Mở trang giảng viên**, đăng nhập bằng mật khẩu.
-3. Bấm **Đặt vị trí thiết bị này làm vị trí lớp học** và cho phép vị trí. (Nút này cũng có trên máy tính, nhưng GPS máy tính kém; vị trí kém chính xác hơn sẽ không ghi đè vị trí tốt hơn trừ khi giảng viên xác nhận.)
-4. Sinh viên được hỏi quyền vị trí mỗi lần bấm **Gửi**. Dữ liệu vị trí chỉ nằm trong bộ nhớ máy chủ và **bị xóa khi phiên hết hạn hoặc giảng viên bấm Tắt mã QR** (không bị xóa khi bấm Làm mới). Việc xóa chạy khi có trang được tải hoặc màn hình QR của giảng viên đang mở, vì Streamlit không có bộ đếm thời gian nền. Các cờ đã ghi trong Google Sheet vẫn được giữ.
+### Chống gian lận (âm thầm)
+Hệ thống **không bao giờ chặn** sinh viên. Mọi trường hợp đáng ngờ chỉ được **gắn cờ kèm lý do** trong ô của Google Sheet (nhiều cờ cách nhau bằng xuống dòng) để giảng viên kiểm tra thủ công. Sinh viên không thấy thông báo gắn cờ.
 
----
+| Lớp bảo vệ | Cách hoạt động |
+|---|---|
+| **QR xoay vòng** | QR đổi mỗi **20 giây**; server chấp nhận mã hiện tại và mã liền trước (quét được trong 20-40 giây). Ảnh chụp hoặc đường dẫn gửi muộn sẽ vô dụng. Chỉ cần quét kịp lúc **mở trang**; sau đó sinh viên có tối đa 10 phút để nhập thông tin, không bị áp lực thời gian. |
+| **Mã xác nhận trên màn hình** | Cạnh QR có mã 4 chữ số đổi mỗi **10 giây** (chấp nhận mã hiện tại và mã liền trước). Sinh viên nhập mã này một lần, ở bước **Tiếp tục**. Người ở xa chỉ có đường dẫn sẽ không có mã. |
+| **Cờ `Duplicate Device`** | Một thiết bị điểm danh cho Mã SV **khác** trong cùng ngày. Kết hợp: cookie, localStorage, và (cho tab ẩn danh) **cùng IP + cùng "chữ ký" thiết bị**. IP đứng một mình không phải dấu hiệu (cả lớp dùng chung IP Wi-Fi trường). Cả hai ô (người trước và người sau) đều được gắn cờ, kèm các tín hiệu khớp. |
+| **Cờ GPS** | `OUT_OF_RANGE`, `GPS_DENIED`, `GPS_LOW_ACCURACY`: so vị trí sinh viên với vị trí giảng viên (bán kính 500 m, đã trừ sai số GPS của hai thiết bị). **Chỉ hoạt động sau khi giảng viên đặt vị trí**; trước đó không ai bị gắn cờ GPS. |
 
-## 🛠 Hướng Dẫn Cài Đặt (Dành cho Team Dev)
-
-### 1. Yêu Cầu Hệ Thống
-*   Máy tính đã cài đặt Python phiên bản 3.9 trở lên.
-*   Máy tính đóng vai trò là Server (máy của giảng viên/nhóm trưởng chạy app) và điện thoại của sinh viên phải kết nối **CÙNG MỘT MẠNG WI-FI** (xem mục **Xử lý sự cố mạng** bên dưới nếu điện thoại không vào được).
-
-### 2. Cài Đặt Môi Trường
-Mở Terminal (hoặc Command Prompt) tại thư mục chứa mã nguồn dự án và chạy lệnh sau để cài đặt các thư viện cần thiết (cần Streamlit **1.46 trở lên**):
-```bash
-pip install -r requirements.txt
+Ví dụ nội dung một ô có nhiều cờ:
+```
+Duplicate Device: previously by 2012345 - Nguyen Van A (cookie, browser storage)
+GPS_DENIED: no location from the student's device (denied)
 ```
 
-### 3. Cấu Hình Google Sheets API
+---
 
-Để hệ thống có thể ghi dữ liệu tự động, bạn cần cấu hình tài khoản dịch vụ của Google:
+## 📖 Hướng Dẫn Sử Dụng
 
-1. Truy cập [Google Cloud Console](https://console.cloud.google.com/) và tạo một Project mới.
-2. Bật (Enable) 2 API: **Google Sheets API** và **Google Drive API**.
-3. Tạo thông tin xác thực (Credentials) dạng **Service Account**.
-4. Tạo khóa (Key) mới định dạng JSON và tải về máy.
-5. Đổi tên file vừa tải thành `credentials.json` và **đặt vào thư mục gốc** của dự án này.
-6. **QUAN TRỌNG:** Mở file `credentials.json`, copy địa chỉ email (`client_email`). Mở file Google Sheets mà bạn muốn dùng để lưu dữ liệu, nhấn **Share** và cấp quyền **Editor** cho địa chỉ email vừa copy.
-7. Mở file `utils/gsheets_api.py`, tìm biến `SHEET_URL` và thay bằng đường link (URL) thực tế của file Google Sheets đó.
-8. Mỗi lớp là một **Tab** trong Google Sheets (ví dụ `L01`, `L02`). Cột A là **Mã SV**, cột B là **Họ Tên**. Có thể nhập sẵn danh sách lớp; sinh viên chưa có trong danh sách sẽ được tự thêm vào cuối. Mỗi ngày hệ thống tự thêm một cột ngày mới.
+### Giảng viên
+1. Mở `https://<tên-app>.streamlit.app/teacher`, đăng nhập bằng mật khẩu giảng viên.
+2. Nhập tên Lớp/Tab (ví dụ `L01`; không phân biệt hoa/thường, nhập sai sẽ báo kèm danh sách tab hiện có).
+3. Bấm **Tạo mã QR** và trình chiếu lên màn hình lớn (nút **Hiển thị toàn màn hình**). **Giữ trang này mở:** QR và mã xác nhận tự đổi, và việc dọn dữ liệu vị trí cũng chạy từ trang này.
+4. **Đặt vị trí lớp học (GPS):** GPS máy tính thường kém, nên làm bằng điện thoại:
+   1. Dùng điện thoại quét chính mã QR vừa tạo, vào trang sinh viên.
+   2. Kéo xuống cuối trang, bấm **Giảng viên? Mở trang giảng viên**, đăng nhập bằng mật khẩu (tên lớp được điền sẵn).
+   3. Bấm **Đặt vị trí thiết bị này làm vị trí lớp học** và chọn **Cho phép** vị trí.
+   
+   Nút này cũng có trên máy tính. Vị trí mới kém chính xác hơn vị trí đã lưu sẽ **không ghi đè**, trừ khi giảng viên bấm xác nhận. Sinh viên điểm danh trước khi giảng viên đặt vị trí sẽ được kiểm tra lại ngay khi vị trí được đặt.
+5. Một phiên kéo dài **10 phút** kể từ lúc tạo mã. **Làm mới mã QR** bắt đầu lại 10 phút (giữ nguyên dữ liệu vị trí). **Tắt mã QR** kết thúc phiên.
+6. Mở Google Sheet, các ô có cờ là những dòng cần kiểm tra thủ công.
 
-### 4. Đặt Mật Khẩu Giảng Viên
+### Sinh viên
+1. Quét mã QR trên bảng bằng Camera/Zalo; trang điểm danh tự mở.
+2. Nhập Mã SV, Họ tên và **mã xác nhận 4 chữ số** đang hiển thị trên màn hình (nhập mã sau cùng, ngay trước khi bấm **Tiếp tục**), kiểm tra lại rồi bấm **Gửi**.
+3. Cho phép vị trí khi trình duyệt hỏi (chỉ dùng để xác nhận đang ở lớp). Nếu lỡ từ chối, trang sẽ có nút **Gửi lại** để thử lại; bản ghi chỉ được cập nhật chứ không bị trùng.
+4. Màn hình báo thành công và tự đóng sau 2 giây.
 
-Mật khẩu mặc định là `admin123` (trang giảng viên sẽ hiện cảnh báo khi còn dùng mật khẩu này). Hãy đổi bằng biến môi trường **trước khi chạy**:
+---
 
-```bash
-# Windows (PowerShell)
-$env:TEACHER_PASSWORD = "mat-khau-cua-ban"
+## 🔒 Dữ Liệu Vị Trí và Quyền Riêng Tư
 
-# Windows (Command Prompt)
-set TEACHER_PASSWORD=mat-khau-cua-ban
+*   Vị trí chỉ được hỏi **sau khi** sinh viên đã nhập tên và Mã SV, và chỉ trên trang điểm danh. Tọa độ **chỉ nằm trong bộ nhớ máy chủ**, không ghi vào Google Sheet; sheet chỉ nhận dòng cờ (ví dụ `OUT_OF_RANGE: about 1.8 km from the lecturer`).
+*   Tọa độ **bị xóa** khi phiên hết hạn tự nhiên hoặc khi giảng viên bấm **Tắt mã QR** (không xóa khi bấm Làm mới). Các cờ đã ghi trong Google Sheet vẫn được giữ.
+*   Streamlit không có bộ đếm thời gian nền, nên việc xóa chạy khi màn hình QR của giảng viên đang mở (kiểm tra mỗi giây) hoặc ở lần tải trang kế tiếp. Nếu không ai tải trang nào, tọa độ nằm trong bộ nhớ đến lần tải sau hoặc khi máy chủ khởi động lại.
+*   Địa chỉ IP và chữ ký thiết bị chỉ giữ trong bộ nhớ trong ngày hôm đó, không ghi vào sheet.
+*   Nếu trường có chính sách dữ liệu riêng, nên đối chiếu thêm.
 
-# macOS / Linux
-export TEACHER_PASSWORD="mat-khau-cua-ban"
+---
+
+## 🛠 Cài Đặt và Triển Khai
+
+### Triển khai trên Streamlit Community Cloud (khuyến nghị)
+Xem hướng dẫn từng bước trong **`DEPLOY_STREAMLIT_CLOUD.md`**. Tóm tắt: đưa mã lên GitHub (kho **private**), tạo app trên share.streamlit.io, dán nội dung Secrets, đặt app ở chế độ truy cập công khai (để sinh viên mở được trang điểm danh).
+
+**Secrets** (Settings → Secrets). Mỗi khóa có thể đặt ở cấp cao nhất, hoặc trong bảng `[app]`, viết hoa hoặc thường:
+```toml
+PUBLIC_BASE_URL  = "https://ten-app.streamlit.app"   # phải khớp URL app
+SHEET_URL        = "https://docs.google.com/spreadsheets/d/..."
+TEACHER_PASSWORD = "mat-khau-manh-it-nhat-12-ky-tu"
+APP_SECRET_KEY   = "64-ky-tu-hex"   # python -c "import secrets; print(secrets.token_hex(32))"
+
+[gcp_service_account]
+# ... toàn bộ nội dung file JSON của service account ...
 ```
+Lưu ý: nếu **không** đặt mật khẩu, hệ thống dùng mật khẩu mặc định `admin123` (và cảnh báo trên trang giảng viên). Đổi mật khẩu rồi nên khởi động lại app.
 
-### 5. Khởi Động Máy Chủ (Server)
+### Cấu hình Google Sheets
+1. Tạo Project trong [Google Cloud Console](https://console.cloud.google.com/), bật **Google Sheets API** và **Google Drive API**.
+2. Tạo **Service Account**, tạo khóa JSON và tải về (`credentials.json`, **không đưa lên GitHub**).
+3. Mở Google Sheet, nhấn **Share**, cấp quyền **Editor** cho `client_email` trong file JSON.
+4. Mỗi lớp là một **Tab** (ví dụ `L01`). Cột A là **Mã SV**, cột B là **Họ Tên**; có thể nhập sẵn danh sách lớp. Hệ thống tự thêm cột ngày mới mỗi ngày.
 
-Tại thư mục chứa dự án, chạy lệnh:
+Có thể dùng `python scripts/make_cloud_secrets.py` để tạo sẵn file secrets từ `credentials.json`.
 
+### Chạy thử trên máy cá nhân
 ```bash
-streamlit run app.py
+pip install -r requirements.txt        # cần Streamlit 1.46 trở lên
+streamlit run app.py                   # giảng viên mở http://localhost:8501/teacher
 ```
-hoặc
-
-```bash
-python -m streamlit run app.py
-```
-
-Terminal sẽ hiển thị 2 đường link. Giảng viên mở trang quản lý bằng `http://localhost:8501/teacher`.
+Khi chạy cục bộ có thể đặt mật khẩu bằng biến môi trường `TEACHER_PASSWORD`, và dùng `credentials.json` + `secret.key` thay cho Secrets. **Lưu ý:** trình duyệt chỉ cho phép lấy vị trí trên HTTPS hoặc `localhost`; nếu chạy qua địa chỉ IP LAN bằng `http://`, tính năng GPS sẽ không hoạt động (bản trên Streamlit Cloud là HTTPS nên không bị ảnh hưởng).
 
 ---
 
-## 📖 Hướng Dẫn Sử Dụng (Luồng Hoạt Động)
+## ⚙️ Tinh Chỉnh Thông Số
 
-### Đối Với Giảng Viên (Teacher Portal):
+| Thông số | File | Mặc định |
+|---|---|---|
+| Chu kỳ đổi QR / số khung cũ được chấp nhận | `utils/security.py`: `QR_ROTATION_SECONDS`, `QR_ACCEPTED_PREVIOUS_SLOTS` | 20 s / 1 |
+| Chu kỳ đổi mã xác nhận / số mã cũ được chấp nhận | `SCREEN_CODE_PERIOD_SECONDS`, `SCREEN_CODE_ACCEPTED_PREVIOUS` | 10 s / 1 |
+| Thời lượng một phiên; thời gian sinh viên được nhập thông tin | `QR_VALIDITY_SECONDS`, `STUDENT_FORM_SECONDS` | 600 s |
+| Bán kính GPS; ngưỡng độ chính xác "quá mờ" | `utils/class_session.py`: `GPS_RADIUS_METERS`, `GPS_LOW_ACCURACY_METERS` | 500 m / 1000 m |
 
-1. Trên máy chạy server, mở trình duyệt và gõ `http://localhost:8501/teacher` (trang này không có liên kết nào dẫn tới, phải gõ trực tiếp).
-2. Nhập mật khẩu giảng viên.
-3. Trang giảng viên hiển thị đường dẫn tới Google Sheets điểm danh. Nhập tên Lớp/Tab (ví dụ `L01`). Hệ thống kiểm tra tab có tồn tại không (không phân biệt hoa/thường) và báo lỗi kèm danh sách tab hiện có nếu gõ sai.
-4. Bấm **Tạo mã QR** và trình chiếu mã QR (nút **Hiển thị toàn màn hình**) lên màn hình lớn cho sinh viên.
-5. *Mã QR tự hết hạn sau 10 phút. Bấm **Làm mới mã QR** để tạo mã mới.*
-
-### Đối Với Sinh Viên (Student Check-In):
-
-1. Dùng ứng dụng Camera hoặc Zalo trên điện thoại (đã kết nối chung mạng Wi-Fi với giảng viên) để quét mã QR trên bảng.
-2. Điện thoại tự động mở trang điểm danh.
-3. Nhập Mã Sinh Viên (7 chữ số) và Họ Tên, bấm **Tiếp tục**, kiểm tra lại rồi bấm **Gửi**.
-4. Màn hình báo thành công. Dòng của sinh viên (ở cột ngày hôm nay) sẽ tự động xuất hiện trên Google Sheets của giảng viên.
-
-Sinh viên đã mở được trang trước khi mã hết hạn vẫn có thêm 5 phút để nhập và gửi.
+Nếu sinh viên hay gặp lỗi "mã xác nhận đã đổi", tăng `SCREEN_CODE_ACCEPTED_PREVIOUS` lên 2.
 
 ---
 
-## 🌐 Xử Lý Sự Cố Mạng (Điện Thoại Không Vào Được)
+## 📁 Cấu Trúc Mã Nguồn
 
-Streamlit **có hỗ trợ** truy cập từ thiết bị khác trong cùng mạng (mặc định nó lắng nghe trên mọi card mạng). Nếu điện thoại không vào được, thường là do mạng/tường lửa chứ không phải do code. Cách kiểm tra nhanh nhất: trên điện thoại (đang dùng Wi-Fi), mở trình duyệt và gõ thẳng `http://<IP máy chạy server>:8501`. Nếu cũng không vào được thì lỗi nằm ở mạng, theo thứ tự thường gặp:
-
-1. **Wi-Fi của trường bật "cô lập thiết bị" (client/AP isolation)**: các thiết bị trên Wi-Fi không nhìn thấy nhau, rất phổ biến ở Wi-Fi trường/quán cà phê. Cũng xảy ra khi laptop cắm dây LAN còn điện thoại dùng Wi-Fi (khác phân đoạn mạng). Cách thử: dùng một laptop/điện thoại thứ hai cùng Wi-Fi để vào địa chỉ trên.
-2. **Tường lửa của máy chạy server chặn cổng 8501** (hay gặp nhất trên Windows khi mạng đang đặt là *Public*). Cho phép Python/Streamlit qua tường lửa, hoặc mở cổng bằng lệnh (chạy Command Prompt bằng quyền Administrator):
-   ```
-   netsh advfirewall firewall add rule name="Streamlit" dir=in action=allow protocol=TCP localport=8501
-   ```
-3. **Mã QR chứa sai địa chỉ IP** (khi máy có VPN, WSL, Docker, VirtualBox...). So sánh địa chỉ trong "Đường dẫn kiểm thử" trên trang giảng viên với kết quả lệnh `ipconfig` (Windows) hoặc `ifconfig` (macOS/Linux). Nếu sai, nhập địa chỉ đúng vào **Tùy chọn nâng cao** trên trang giảng viên.
-4. Điện thoại đang dùng 4G/5G thay vì Wi-Fi, hoặc trình duyệt bật chế độ "chỉ dùng kết nối bảo mật (HTTPS)" nên chặn địa chỉ `http://`.
-
-**Nếu Wi-Fi của trường chặn hẳn, có 2 cách thay thế:**
-
-*   **Phát Wi-Fi riêng:** bật Mobile Hotspot trên laptop (hoặc điện thoại) của giảng viên, sinh viên kết nối vào đó rồi quét mã QR.
-*   **Đường hầm (tunnel):** chạy `cloudflared tunnel --url http://localhost:8501` (hoặc `ngrok http 8501`), rồi dán địa chỉ `https://...` nhận được vào **Tùy chọn nâng cao** trên trang giảng viên và tạo lại mã QR. Sinh viên dùng được cả 4G. **Lưu ý:** khi đó trang `/teacher` cũng truy cập được từ Internet, vì vậy bắt buộc phải đặt `TEACHER_PASSWORD` mạnh.
+* `app.py`: điểm vào, khai báo các trang (`/teacher` và đường dẫn ngẫu nhiên của sinh viên).
+* `views/teacher.py`: giao diện giảng viên (đăng nhập, QR trực tiếp, mã xác nhận, đặt vị trí GPS).
+* `views/student.py`: giao diện điểm danh (mã xác nhận, hỏi vị trí, gửi, thông báo thành công).
+* `utils/security.py`: ký và kiểm tra token QR xoay vòng, mã xác nhận, mật khẩu giảng viên, đọc Secrets, tạo ảnh QR.
+* `utils/class_session.py`: phiên điểm danh trong bộ nhớ, vị trí giảng viên/sinh viên, quy tắc cờ GPS, dọn dữ liệu khi hết phiên.
+* `utils/device_check.py`: tín hiệu thiết bị trùng (cookie, localStorage, IP + chữ ký thiết bị).
+* `utils/geo.py`: lấy vị trí từ trình duyệt (component tự viết, không cần thư viện thêm).
+* `utils/gsheets_api.py`: đọc/ghi Google Sheets (khóa chống ghi chồng, tự thử lại khi quá tải, so khớp họ tên, ghi cờ nhiều dòng, cập nhật cờ GPS hàng loạt).
+* `components/device_cookie/`, `components/geo_locator/`: hai component JavaScript nhỏ chạy trong trình duyệt.
+* `scripts/make_cloud_secrets.py`: tạo file secrets từ `credentials.json`.
+* `credentials.json`, `secret.key`, `.streamlit/secrets.toml`: **không đưa lên GitHub**.
 
 ---
 
-## 📁 Cấu Trúc Mã Nguồn (Folder Structure)
+## ⚠️ Rủi Ro Còn Lại và Giới Hạn
 
-* `app.py`: Điểm vào của ứng dụng, khai báo các đường dẫn (URL) của từng trang.
-* `views/`: Chứa các trang giao diện của Streamlit.
-    * `landing.py`: Trang chủ trung lập (không tiết lộ đường dẫn nào).
-    * `teacher.py`: Giao diện quản lý dành cho Giảng viên (`/teacher`).
-    * `student.py`: Giao diện điểm danh dành cho Sinh viên (đường dẫn ngẫu nhiên).
-* `utils/`: Chứa các hàm xử lý logic Backend.
-    * `gsheets_api.py`: Kết nối và ghi dữ liệu Google Sheets (có khóa chống ghi chồng, tự thử lại khi Google báo quá tải, so khớp họ tên).
-    * `security.py`: Ký và kiểm tra token, đường dẫn trang sinh viên, kiểm tra mật khẩu giảng viên, tạo hình ảnh mã QR.
-    * `device_check.py`: Nhận diện thiết bị trùng bằng Cookie (theo ngày).
-    * `ui_helpers.py`: Đoạn script dùng chung cho giao diện.
-* `requirements.txt`: Danh sách các thư viện Python phụ thuộc.
-* `credentials.json`: File chứa khóa bảo mật của Google (không đưa lên Github).
-* `secret.key`: Khóa bí mật cục bộ (tự động tạo khi chạy lần đầu, không đưa lên Github). Đường dẫn trang sinh viên được suy ra từ file này; xóa file để đổi sang đường dẫn mới.
+*   **Chuyển tiếp trực tiếp (live relay):** một bạn trong lớp chụp ảnh QR + mã xác nhận gửi ngay cho người ở nhà trong vài chục giây vẫn có thể qua được lớp QR/mã. Lớp GPS sẽ gắn cờ người đó (xa lớp) trừ khi họ giả lập vị trí. Hệ thống **làm khó và để lại dấu vết cho giảng viên kiểm tra**, chứ không chứng minh tuyệt đối sinh viên có mặt trong phòng.
+*   **Giả lập GPS:** công cụ giả vị trí (Chrome DevTools, ứng dụng mock location) có thể qua mặt kiểm tra GPS nếu biết tọa độ lớp.
+*   **Gắn cờ có thể nhầm:** hai điện thoại giống hệt nhau trong cùng Wi-Fi có thể bị gắn `Duplicate Device`; GPS trong nhà có thể sai vài chục đến hàng trăm mét. Vì vậy cờ chỉ để **tham khảo**, giảng viên quyết định cuối cùng.
+*   **Dữ liệu trong bộ nhớ:** nếu máy chủ miễn phí ngủ hoặc khởi động lại giữa buổi, phiên và vị trí bị mất; giảng viên đăng nhập lại và bấm Tạo mã QR.
+*   **Tải lại trình duyệt:** sinh viên tải lại trang bằng đường dẫn QR cũ sẽ bị từ chối (QR đã đổi) và cần quét lại. Giảng viên tải lại `/teacher` sẽ mất phiên đăng nhập và QR đang hiển thị.
+*   **Giới hạn Google Sheets API:** khoảng 60 lượt đọc và 60 lượt ghi mỗi phút. Nếu cả lớp đông gửi cùng lúc, một số em có thể thấy "Hệ thống đang quá tải" và chỉ cần bấm **Gửi** lại.
+*   **Trang `/teacher` truy cập được từ Internet** (và có nút dẫn từ trang sinh viên), nên bắt buộc dùng mật khẩu mạnh.
+*   Streamlit Community Cloud phù hợp cho MVP/demo; hãy thử với số lượng sinh viên dự kiến trước khi dùng thật.
 
 ---
 
-## ⚠️ Giới Hạn Đã Biết
-
-*   Google Sheets API giới hạn khoảng 60 lượt đọc và 60 lượt ghi mỗi phút (theo tài liệu của Google, có thể thay đổi). Mỗi lượt điểm danh dùng 1 lượt đọc và 1 lượt ghi, nên nếu cả lớp đông quét cùng lúc, một số em có thể thấy "Hệ thống đang quá tải" và chỉ cần bấm **Gửi** lại.
-*   Nhận diện thiết bị bằng Cookie chỉ ngăn được việc dùng chung điện thoại thông thường; sinh viên xóa Cookie hoặc dùng tab ẩn danh sẽ không bị phát hiện.
-*   Nếu giảng viên tải lại trang `/teacher`, phiên đăng nhập và mã QR đang hiển thị sẽ mất (đăng nhập và tạo lại là được).
-
----
-
-*Dự án được xây dựng phục vụ mục đích học thuật và thử nghiệm. Vui lòng không sử dụng cho các hệ thống yêu cầu bảo mật cấp doanh nghiệp nếu chưa nâng cấp cơ chế xác thực.*
+*Dự án phục vụ mục đích học thuật và thử nghiệm. Vui lòng không dùng cho hệ thống yêu cầu bảo mật cấp doanh nghiệp nếu chưa nâng cấp cơ chế xác thực.*
