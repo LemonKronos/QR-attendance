@@ -53,14 +53,11 @@ def render_success_card(
     Used right after sending AND on any later rerun (checkin_step == "done"),
     so a rerun can never bring the entry form back or allow a second send.
     """
-    auto_close_html = """
-        <div id="auto-exit-status" style="color: #1488DB; font-weight: 600; font-size: 0.95rem; margin-top: 12px;">
-            Tự động đóng trang sau 2 giây...
-        </div>
-        <div class="countdown-track">
-            <div class="countdown-bar"></div>
-        </div>
-    """ if auto_close else ""
+    auto_close_html = (
+        '<div id="auto-exit-status" style="color: #1488DB; font-weight: 600; '
+        'font-size: 0.95rem; margin-top: 12px;">Tự động đóng trang sau 2 giây...</div>'
+        '<div class="countdown-track"><div class="countdown-bar"></div></div>'
+    ) if auto_close else ""
 
     st.markdown(f"""
     <div class="confirm-card">
@@ -77,7 +74,7 @@ def render_success_card(
         </div>
         {auto_close_html}
     </div>
-    """, unsafe_allow_html=True)
+    """.replace("\n", "").replace("    ", ""), unsafe_allow_html=True)
 
     if not auto_close:
         # Location was not received: keep the page open so the student can allow

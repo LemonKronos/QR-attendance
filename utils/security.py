@@ -37,15 +37,31 @@ APP_SECRET_KEY_ENVIRONMENT_VARIABLE = "APP_SECRET_KEY"
 
 
 def _get_configured_secret(name: str) -> str:
-    """Read a top-level Streamlit secret, falling back safely when not configured."""
+    """Read a setting from an environment variable or Streamlit secrets.
+
+    Accepted spellings in secrets (first match wins):
+        TEACHER_PASSWORD = "..."            (top level)
+        teacher_password = "..."            (top level, lower case)
+        [app] TEACHER_PASSWORD / teacher_password = "..."
+    """
     environment_value = os.environ.get(name, "").strip()
     if environment_value:
         return environment_value
     try:
-        return str(st.secrets.get(name, "")).strip()
+        secrets = st.secrets
+        containers = [secrets]
+        app_section = secrets.get("app")
+        if app_section is not None and hasattr(app_section, "get"):
+            containers.append(app_section)
+        for container in containers:
+            for key in (name, name.lower()):
+                value = container.get(key)
+                if value:
+                    return str(value).strip()
     except Exception:
         # Streamlit raises when no secrets.toml exists in local development.
-        return ""
+        pass
+    return ""
 
 
 def _load_or_create_secret_key() -> bytes:
